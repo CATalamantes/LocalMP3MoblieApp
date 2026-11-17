@@ -44,8 +44,12 @@ class AudioSourceResolver {
     }
     if (uri.scheme == 'asset' &&
         uri.host.isEmpty &&
-        !uri.pathSegments.any((s) => s == '..' || s == '.')) {
-      final key = uri.path.replaceFirst(RegExp(r'^/'), '');
+        !uri.pathSegments.any(
+          (s) => s == '..' || s == '.' || s.contains('/') || s.contains('\\'),
+        )) {
+      // Uri.path retains percent escapes. AssetManifest keys use decoded names,
+      // including the spaces in the owner's existing Track WAV filenames.
+      final key = uri.pathSegments.join('/');
       if (!key.startsWith('assets/audio/') ||
           key.length <= 'assets/audio/'.length) {
         throw AudioFailure(

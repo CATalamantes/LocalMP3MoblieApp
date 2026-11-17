@@ -1,1 +1,44 @@
-[]
+[
+  {
+    "song_id": "dev-wav-track-01",
+    "title": "Track 1",
+    "artist_name": "Unknown artist",
+    "asset_path": "assets/audio/01 Track 1.wav",
+    "duration_ms": 238146
+  },
+  {
+    "song_id": "dev-wav-track-02",
+    "title": "Track 2",
+    "artist_name": "Unknown artist",
+    "asset_path": "assets/audio/02 Track 2.wav",
+    "duration_ms": 241560
+  },
+  {
+    "song_id": "dev-wav-track-03",
+    "title": "Track 3",
+    "artist_name": "Unknown artist",
+    "asset_path": "assets/audio/03 Track 3.wav",
+    "duration_ms": 278080
+  },
+  {
+    "song_id": "dev-wav-track-04",
+    "title": "Track 4",
+    "artist_name": "Unknown artist",
+    "asset_path": "assets/audio/04 Track 4.wav",
+    "duration_ms": 211000
+  },
+  {
+    "song_id": "dev-wav-track-05",
+    "title": "Track 5",
+    "artist_name": "Unknown artist",
+    "asset_path": "assets/audio/05 Track 5.wav",
+    "duration_ms": 324306
+  },
+  {
+    "song_id": "dev-wav-track-06",
+    "title": "Track 6",
+    "artist_name": "Unknown artist",
+    "asset_path": "assets/audio/06 Track 6.wav",
+    "duration_ms": 240880
+  }
+]

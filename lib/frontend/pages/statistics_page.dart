@@ -4,6 +4,8 @@ import '../routes/app_screen.dart';
 import '../theme/app_theme.dart';
 import '../widgets/design_widgets.dart';
 import '../widgets/presentation.dart';
+import '../widgets/application_binding.dart';
+import '../../backend/models/listening_statistics.dart';
 
 class StatisticsPage extends StatefulWidget {
   const StatisticsPage({super.key, required this.data});
@@ -16,6 +18,15 @@ class _StatisticsPageState extends State<StatisticsPage> {
   String _period = 'All Time';
   @override
   Widget build(BuildContext context) {
+    final a = widget.data.integrated ? ApplicationScope.of(context) : null;
+    final selectedPeriod = a == null
+        ? _period
+        : switch (widget.data.period) {
+            StatisticsPeriod.allTime => 'All Time',
+            StatisticsPeriod.week => 'Week',
+            StatisticsPeriod.month => 'Month',
+            _ => 'Year',
+          };
     final stats = widget.data.statistics;
     final duration = stats?.totalListeningDuration;
     final values = [
@@ -23,6 +34,8 @@ class _StatisticsPageState extends State<StatisticsPage> {
         'LISTENING TIME',
         duration == null
             ? '—'
+            : widget.data.integrated
+            ? '${duration.inHours}h ${duration.inMinutes.remainder(60)}m ${duration.inSeconds.remainder(60)}s ${duration.inMilliseconds.remainder(1000)}ms'
             : '${duration.inHours}h ${duration.inMinutes.remainder(60)}m',
         Icons.schedule,
       ),
@@ -37,6 +50,8 @@ class _StatisticsPageState extends State<StatisticsPage> {
     return PageBody(
       screen: AppScreen.statistics,
       children: [
+        if (widget.data.errorMessage != null)
+          Text(widget.data.errorMessage!, style: mutedStyle),
         const Text(
           'LISTENING INSIGHTS',
           style: TextStyle(
@@ -48,12 +63,29 @@ class _StatisticsPageState extends State<StatisticsPage> {
         const SizedBox(height: 16),
         ChoicePills(
           labels: const ['Week', 'Month', 'Year', 'All Time'],
-          selected: _period,
-          onSelected: (value) => setState(() => _period = value),
+          selected: selectedPeriod,
+          onSelected: (value) {
+            if (a == null) {
+              setState(() => _period = value);
+            } else {
+              a.quietly(
+                () => a.loadStatistics(
+                  selected: switch (value) {
+                    'Week' => StatisticsPeriod.week,
+                    'Month' => StatisticsPeriod.month,
+                    'Year' => StatisticsPeriod.year,
+                    _ => StatisticsPeriod.allTime,
+                  },
+                ),
+              );
+            }
+          },
         ),
         const SizedBox(height: 16),
-        const Text(
-          'Period selection is a draft. Statistics are not connected.',
+        Text(
+          a == null
+              ? 'Period selection is a draft. Statistics are not connected.'
+              : 'Calendar-period totals from saved listening history.',
           style: mutedStyle,
         ),
         const SizedBox(height: 18),
@@ -107,20 +139,30 @@ class _StatisticsPageState extends State<StatisticsPage> {
             children: [
               const Text('Listening Activity', style: headingStyle),
               const SizedBox(height: 8),
-              const Text('Weekly hours breakdown', style: mutedStyle),
+              Text(
+                a == null
+                    ? 'Weekly hours breakdown'
+                    : 'Latest up to 20 sessions in this period · Hours',
+                style: mutedStyle,
+              ),
               const SizedBox(height: 24),
-              ActivityChart(hours: widget.data.activityHours),
+              ActivityChart(
+                hours: widget.data.activityHours,
+                recent: widget.data.integrated,
+              ),
               const SizedBox(height: 18),
               Text(
                 widget.data.activityHours.isEmpty
                     ? 'No listening activity available.'
-                    : 'Design sample · Weekly activity',
+                    : a == null
+                    ? 'Design sample · Weekly activity'
+                    : 'Recent sessions only; full-period totals shown above.',
                 style: mutedStyle,
               ),
             ],
           ),
         ),
-        SectionTitle('Top Tracks · $_period'),
+        SectionTitle('Top Tracks · $selectedPeriod'),
         if (stats == null || stats.topTracks.isEmpty)
           const SurfaceCard(
             child: Text('No top tracks available.', style: mutedStyle),
@@ -138,7 +180,7 @@ class _StatisticsPageState extends State<StatisticsPage> {
             ),
         const SectionTitle('Top Artists'),
         SurfaceCard(
-          child: widget.data.songs.isEmpty
+          child: widget.data.integrated || widget.data.songs.isEmpty
               ? const Text('Artist summaries unavailable.', style: mutedStyle)
               : Wrap(
                   spacing: 12,
@@ -177,7 +219,15 @@ class _StatisticsPageState extends State<StatisticsPage> {
               if (stats != null)
                 for (final history in stats.recentHistory)
                   SettingsRow(
-                    title: history.songId,
+                    title: widget.data.integrated
+                        ? widget.data.availableSongs
+                                  .where(
+                                    (song) => song.songId == history.songId,
+                                  )
+                                  .firstOrNull
+                                  ?.title ??
+                              history.songId
+                        : history.songId,
                     subtitle:
                         '${history.startedAt.toIso8601String().split('T').first} · ${history.listenedMs} ms',
                     icon: Icons.history,
@@ -198,36 +248,63 @@ class _StatisticsPageState extends State<StatisticsPage> {
 }
 
 class ActivityChart extends StatelessWidget {
-  const ActivityChart({super.key, required this.hours});
+  const ActivityChart({super.key, required this.hours, this.recent = false});
   final Map<String, double> hours;
+  final bool recent;
   @override
-  Widget build(BuildContext context) => Column(
-    children: [
-      Semantics(
-        label: hours.isEmpty ? 'No chart data' : 'Design sample activity chart',
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) {
+      final labels = recent
+          ? hours.keys.map((day) => day.substring(5)).toList()
+          : ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
+      final minimumWidth =
+          labels.length * MediaQuery.textScalerOf(context).scale(50);
+      final width = recent && minimumWidth > constraints.maxWidth
+          ? minimumWidth
+          : constraints.maxWidth;
+      return SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
         child: SizedBox(
-          height: 110,
-          child: CustomPaint(
-            size: const Size(double.infinity, 110),
-            painter: _ActivityPainter(hours),
+          width: width,
+          child: Column(
+            children: [
+              Semantics(
+                label: hours.isEmpty
+                    ? 'No chart data'
+                    : recent
+                    ? 'Recent sessions activity chart, not full-period totals'
+                    : 'Design sample activity chart',
+                child: SizedBox(
+                  height: 110,
+                  child: CustomPaint(
+                    size: const Size(double.infinity, 110),
+                    painter: _ActivityPainter(hours),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  for (final label in labels)
+                    Expanded(
+                      child: Text(
+                        label,
+                        textAlign: TextAlign.center,
+                        style: mutedStyle,
+                      ),
+                    ),
+                ],
+              ),
+              for (final entry in hours.entries)
+                Semantics(
+                  label: '${entry.key}: ${entry.value} hours',
+                  child: const SizedBox.shrink(),
+                ),
+            ],
           ),
         ),
-      ),
-      const SizedBox(height: 10),
-      Row(
-        children: [
-          for (final day in ['M', 'T', 'W', 'T', 'F', 'S', 'S'])
-            Expanded(
-              child: Text(day, textAlign: TextAlign.center, style: mutedStyle),
-            ),
-        ],
-      ),
-      for (final entry in hours.entries)
-        Semantics(
-          label: '${entry.key}: ${entry.value} hours',
-          child: const SizedBox.shrink(),
-        ),
-    ],
+      );
+    },
   );
 }
 

@@ -6,36 +6,78 @@ import '../theme/app_theme.dart';
 import '../widgets/design_widgets.dart';
 import '../widgets/draft_editors.dart';
 import '../widgets/presentation.dart';
+import '../widgets/application_binding.dart';
 
-void _showQueue(BuildContext context, ScreenPresentation data) =>
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      builder: (context) => SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              const Text('Queue', style: headingStyle),
-              const SizedBox(height: 12),
-              const Text('Playback queue is not connected.', style: mutedStyle),
-              if (data.songs.isEmpty)
-                const Padding(
-                  padding: EdgeInsets.all(16),
-                  child: Text('No queued songs'),
+void _showQueue(BuildContext context, ScreenPresentation data) {
+  final a = data.integrated ? ApplicationScope.of(context) : null;
+  final origin = PageNavigationScope.of(context)?.origin;
+  showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    builder: (sheetContext) {
+      Widget content(ScreenPresentation input) => PageNavigationScope(
+        origin: origin,
+        presentation: input,
+        child: SafeArea(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const Text('Queue', style: headingStyle),
+                const SizedBox(height: 12),
+                Text(
+                  a == null ? 'Playback queue is not connected.' : 'Select an occurrence. Existing play intent is preserved.',
+                  style: mutedStyle,
                 ),
-              for (final song in data.songs) SongRow(song: song),
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('Close'),
-              ),
-            ],
+                if (input.songs.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.all(16),
+                    child: Text('No queued songs'),
+                  ),
+                for (var index = 0; index < input.songs.length; index++)
+                  SongRow(
+                    key: ValueKey('queue-occurrence-$index'),
+                    song: input.songs[index],
+                    trailing: a == null
+                        ? null
+                        : IconButton(
+                            tooltip: 'Select queue occurrence ${index + 1}',
+                            icon: Icon(
+                              input.playback?.queueIndex == index
+                                  ? Icons.radio_button_checked
+                                  : Icons.play_arrow,
+                            ),
+                            onPressed: input.playbackBusy
+                                ? null
+                                : () => a.quietly(
+                                    () =>
+                                        a.dependencies.playback.selectAt(index),
+                                  ),
+                          ),
+                  ),
+                if (input.playbackError != null)
+                  Text(input.playbackError!, style: mutedStyle),
+                TextButton(
+                  onPressed: () => Navigator.pop(sheetContext),
+                  child: const Text('Close'),
+                ),
+              ],
+            ),
           ),
         ),
-      ),
-    );
+      );
+      return a == null
+          ? content(data)
+          : AnimatedBuilder(
+              animation: a.dependencies.playback,
+              builder: (_, _) =>
+                  content(livePresentation(a, AppScreen.nowPlaying)),
+            );
+    },
+  );
+}
 
 class NowPlayingPage extends StatelessWidget {
   const NowPlayingPage({super.key, required this.data});
@@ -69,7 +111,11 @@ class NowPlayingPage extends StatelessWidget {
             data.song?.audioFormat ?? 'Format unavailable',
             accent: true,
           ),
-          const StatusPill('Audio output unavailable'),
+          StatusPill(
+            data.integrated && data.playback?.isPlaying == true
+                ? 'Local platform audio'
+                : 'Audio output unavailable',
+          ),
         ],
       ),
       const SizedBox(height: 12),
@@ -107,17 +153,32 @@ class NowPlayingPage extends StatelessWidget {
       const SizedBox(height: 14),
       const PlaybackControls(),
       const SizedBox(height: 18),
-      const Text(
-        'Playback not connected · Awaiting MP3 File',
+      Text(
+        data.integrated
+            ? playbackLabel(data)
+            : 'Playback not connected · Awaiting MP3 File',
         style: mutedStyle,
       ),
       PresentationNotice(data: data, empty: 'No track selected'),
+      if (data.errorMessage != null)
+        Text(data.errorMessage!, style: mutedStyle),
       const SizedBox(height: 16),
       Wrap(
         spacing: 10,
         runSpacing: 10,
         children: [
           const StatusPill('No device connected'),
+          if (data.integrated)
+            ActionPill(
+              'Stop',
+              icon: Icons.stop,
+              onPressed: data.song == null || data.playbackBusy
+                  ? null
+                  : () {
+                      final a = ApplicationScope.of(context)!;
+                      a.quietly(a.dependencies.playback.stop);
+                    },
+            ),
           ActionPill(
             'Queue',
             icon: Icons.queue_music,
@@ -200,8 +261,42 @@ class SongDetailsPage extends StatelessWidget {
                       title: 'Edit manual lyrics',
                       fields: {'Lyrics': data.song!.lyricsText ?? ''},
                       multiline: const {'Lyrics'},
+                      onSave: !data.integrated
+                          ? null
+                          : (fields) async {
+                              final a = ApplicationScope.of(context)!;
+                              final id = data.song!.songId;
+                              await a.dependencies.lyrics.saveManualLyrics(
+                                id,
+                                fields['Lyrics']!,
+                              );
+                              await a.quietly(() => a.refreshSong(id));
+                            },
                     ),
             ),
+            if (data.integrated)
+              ActionPill(
+                'Clear lyrics',
+                icon: Icons.clear,
+                onPressed: data.song?.lyricsText == null
+                    ? null
+                    : () {
+                        final a = ApplicationScope.of(context)!;
+                        final id = data.song!.songId;
+                        confirmAction(
+                          context,
+                          title: 'Clear lyrics?',
+                          message:
+                              'Remove the saved manual lyrics for this song?',
+                          action: 'Clear',
+                          onConfirm: () async {
+                            await a.dependencies.lyrics.clearManualLyrics(id);
+                            await a.quietly(() => a.refreshSong(id));
+                            return 'Lyrics cleared.';
+                          },
+                        );
+                      },
+              ),
             const SizedBox(height: 12),
             const Text(
               'Manually entered text. Timed lyrics and line-to-audio navigation are unavailable.',
@@ -273,9 +368,13 @@ class SongDetailsPage extends StatelessWidget {
             const Text('Listening Insights', style: titleStyle),
             const SizedBox(height: 14),
             Text(
-              data.statistics == null
-                  ? 'No listening history loaded.'
-                  : '${data.statistics!.totalCountedPlays} counted plays',
+              data.statistics == null ||
+                      data.integrated &&
+                          (data.statistics!.selectedSong == null ||
+                              data.statistics!.selectedSong!.song.songId !=
+                                  data.song?.songId)
+                  ? 'No song listening statistics loaded.'
+                  : '${data.integrated ? (data.statistics!.selectedSong != null && data.song != null && data.statistics!.selectedSong!.song.songId == data.song!.songId ? data.statistics!.selectedSong!.countedPlays : 0) : data.statistics!.totalCountedPlays} counted plays',
               style: mutedStyle,
             ),
             TextButton(
@@ -305,6 +404,8 @@ class SongDetailsPage extends StatelessWidget {
         ),
       ),
       PresentationNotice(data: data, empty: 'No song selected'),
+      if (data.errorMessage != null)
+        Text(data.errorMessage!, style: mutedStyle),
     ],
   );
 }
@@ -341,14 +442,16 @@ class FullscreenLyricsPage extends StatelessWidget {
       const SizedBox(height: 40),
       const PlaybackControls(compact: true),
       const SizedBox(height: 12),
-      const Text(
-        'Playback unavailable',
+      Text(
+        data.integrated ? playbackLabel(data) : 'Playback unavailable',
         style: mutedStyle,
         textAlign: TextAlign.center,
       ),
       if (data.mode != PresentationMode.ready) ...[
         const SizedBox(height: 16),
         PresentationNotice(data: data, empty: 'No manual lyrics to display'),
+        if (data.errorMessage != null)
+          Text(data.errorMessage!, style: mutedStyle),
       ],
     ],
   );

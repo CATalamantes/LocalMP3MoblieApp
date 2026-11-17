@@ -101,16 +101,19 @@ async function serve(root, port) {
     console.log('SAME-ORIGIN RELOAD',JSON.stringify(reload));
     await call('Page.navigate',{url:url+'&cleanup=true'});
     await delay(300);assert.equal((await probe()).status,'cleaned');
+    await require('./integrated_ui_verify.cjs')(call,evaluate);
     await call('Page.navigate',{url:'http://127.0.0.1:52843/'});
     let appText='';
     for(let i=0;i<600;i++) {
       await evaluate("document.querySelector('flt-semantics-placeholder')?.click()");
       appText=await evaluate('document.body.innerText');
-      if(appText?.includes('Your Library'))break;
+      if(appText?.includes('Your Library') && appText.includes('No saved songs or playlists'))break;
       await delay(100);
     }
     assert.ok(appText.includes('Your Library'),'Production app did not render Library');
     assert.ok(!appText.includes('could not initialize'),'Production database initialization failed');
+    assert.ok(appText.includes('No saved songs or playlists'),'Fresh production database is not empty');
+    assert.ok(!appText.includes('Browser integration') && !appText.includes('Night Window') && !appText.includes('DESIGN-SAMPLE'),'Test fixtures leaked into production');
     console.log('PRODUCTION APP','Library rendered without initialization error');
     await call('Page.navigate',{url:'http://127.0.0.1:52844/'});
     let developmentText='';

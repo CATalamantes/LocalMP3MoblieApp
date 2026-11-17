@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 
 import 'app.dart';
 import 'backend/app_dependencies.dart';
@@ -25,7 +26,17 @@ Future<void> main() async {
   try {
     final dependencies = await AppDependencies.create(
       httpConfiguration: networking,
+      developmentAudioEnabled: const bool.fromEnvironment(
+        'ENABLE_DEVELOPMENT_AUDIO',
+        defaultValue: kDebugMode,
+      ),
     );
+    if (dependencies.developmentAudio.missing.isNotEmpty) {
+      warning = [
+        ?warning,
+        'Local test audio assets are missing. Run run_test_music.cmd and fully restart the app.',
+      ].join('\n');
+    }
     runApp(
       Mp3ControllerApp(dependencies: dependencies, serviceWarning: warning),
     );

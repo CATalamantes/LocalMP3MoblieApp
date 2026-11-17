@@ -1,29 +1,42 @@
-# Local development audio — awaiting an MP3 file
+# Local development audio
 
-No audio files are included. Do not generate, download, or convert audio for this increment.
-The original WAV files in `Music/` remain untouched and are not registered assets.
+The six owner-supplied WAV recordings can now be used as real test songs.
+Their existing INFO tags say Track 1 through Track 6, Unknown artist.
+Catalog durations come from their actual RIFF/WAVE headers.
 
-Later, place your own playable MP3 here (for example `owner-test.mp3`) and add an entry
-to `development_songs.json`:
+Run from the project folder on Windows:
 
-```json
-[
-  {
-    "song_id": "dev-owner-test",
-    "title": "My test track",
-    "artist_name": "My artist",
-    "asset_path": "assets/audio/owner-test.mp3",
-    "duration_ms": 0
-  }
-]
+```powershell
+.\run_test_music.cmd
 ```
 
-Keep IDs stable. Duration zero means unknown metadata; the playback display uses the
-engine's actual duration. Do not change the JSON to refer to nonexistent files.
-MP3 files are ignored by Git. This documentation and the empty catalog keep the
-directory represented in Git and let builds succeed without audio fixtures.
+The launcher stages byte-identical copies from Music/ into this directory and
+opens the real app in Chrome on port 52848. Normal debug startup also registers
+the existing test audio automatically, without requiring a special flag:
 
-Registration is opt-in with `--dart-define=ENABLE_DEVELOPMENT_AUDIO=true`. Existing
-metadata and lyrics are never overwritten. See the root README for the isolated
-playback harness and verification instructions. Real playback is
-**Not Tested — Awaiting MP3 File**.
+```powershell
+flutter run -d chrome --web-port=52848
+```
+
+With songs and no playlists, Library opens on Songs. Choose a track, then Play.
+Fully stop/restart after a startup-code change; hot reload does not rerun main.
+Originals are not edited,
+converted, downloaded, or renamed. Staged copies and originals are ignored by Git.
+The CMD wrapper permits its local PowerShell child without changing system policy.
+
+Use `run_test_music.cmd -StageOnly` to stage without launching. Afterwards:
+
+```powershell
+flutter run -d chrome --web-port=52848 --dart-define=ENABLE_DEVELOPMENT_AUDIO=true
+```
+
+Registration is automatic in the normal debug app, off by default in release/profile,
+and can be explicitly overridden with ENABLE_DEVELOPMENT_AUDIO=true/false.
+It remains stable and preserves existing edited metadata/lyrics.
+WAV and MP3 catalog entries are supported and stored with their actual format.
+Missing assets are reported rather than inserted; builds work without fixtures.
+Only documentation/catalog metadata and tooling are tracked, never audio.
+
+See doc/WAV-testing.md for actual verification results. Real MP3 acceptance remains
+Not Tested - Awaiting MP3 File. Browser WAV checks do not establish audible output,
+native mobile playback, or physical Radxa acceptance.

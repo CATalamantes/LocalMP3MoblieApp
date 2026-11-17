@@ -1,6 +1,8 @@
 import '../../backend/models/device_models.dart';
 import '../../backend/models/listening_statistics.dart';
 import '../../backend/models/music_models.dart';
+import '../../backend/controllers/playback_controller.dart';
+import '../../backend/controllers/device_controller.dart';
 
 /// Rendering inputs only. No fetching, persistence, playback, or device access.
 enum PresentationMode { unconnected, ready, loading, empty, error, unavailable }
@@ -18,8 +20,19 @@ class ScreenPresentation {
     Iterable<String> folders = const [],
     this.recording,
     this.designPreview = false,
+    this.integrated = false,
+    this.errorMessage,
+    this.playback,
+    this.playbackBusy = false,
+    this.playbackError,
+    this.deviceData,
+    this.period = StatisticsPeriod.allTime,
+    Iterable<PlaylistEntry> entries = const [],
+    Iterable<Song> availableSongs = const [],
     Map<String, double> activityHours = const {},
-  }) : songs = List.unmodifiable(songs),
+  }) : entries = List.unmodifiable(entries),
+       availableSongs = List.unmodifiable(availableSongs),
+       songs = List.unmodifiable(songs),
        playlists = List.unmodifiable(playlists),
        files = List.unmodifiable(files),
        folders = List.unmodifiable(folders),
@@ -37,6 +50,13 @@ class ScreenPresentation {
   final Map<String, double> activityHours;
   // Diagnostic provenance only; cannot enable an operation or hardware trust.
   final bool designPreview;
+  final bool integrated, playbackBusy;
+  final String? errorMessage, playbackError;
+  final PlaybackData? playback;
+  final DeviceData? deviceData;
+  final StatisticsPeriod period;
+  final List<PlaylistEntry> entries;
+  final List<Song> availableSongs;
 
   ScreenPresentation selecting({Song? song, Playlist? playlist}) =>
       ScreenPresentation(
@@ -52,5 +72,14 @@ class ScreenPresentation {
         recording: recording,
         designPreview: designPreview,
         activityHours: activityHours,
+        integrated: integrated,
+        errorMessage: errorMessage,
+        playback: playback,
+        playbackBusy: playbackBusy,
+        playbackError: playbackError,
+        deviceData: deviceData,
+        period: period,
+        entries: entries,
+        availableSongs: availableSongs,
       );
 }

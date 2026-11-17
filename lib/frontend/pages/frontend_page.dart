@@ -4,6 +4,7 @@ import '../routes/app_screen.dart';
 import '../routes/frontend_navigation.dart';
 import '../widgets/design_widgets.dart';
 import '../widgets/presentation.dart';
+import '../widgets/application_binding.dart';
 import 'capture_pages.dart';
 import 'device_pages.dart';
 import 'library_pages.dart';
@@ -44,8 +45,12 @@ class FrontendPage extends StatelessWidget {
     return PageNavigationScope(
       origin: arguments?.origin,
       presentation: data,
-      child: Builder(
-        builder: (context) => ScreenFrame(
+      child: BoundContent(
+        screen: screen,
+        fallback: data,
+        songId: arguments?.songId ?? data.song?.songId,
+        playlistId: arguments?.playlistId ?? data.playlist?.playlistId,
+        builder: (context, data) => ScreenFrame(
           screen: screen,
           body: screenContent(screen, data),
           selectedIndex:

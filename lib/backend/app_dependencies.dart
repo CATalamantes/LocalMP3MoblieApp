@@ -1,4 +1,7 @@
 import 'controllers/device_controller.dart';
+
+import 'package:flutter/foundation.dart';
+
 import 'controllers/library_controller.dart';
 import 'controllers/playlist_controller.dart';
 import 'controllers/lyrics_controller.dart';
@@ -26,8 +29,9 @@ class AppDependencies {
     this.pairing,
     this.http,
     this.audio,
-    this.developmentAudio,
-  );
+    this.developmentAudio, [
+    this._providedDevice,
+  ]);
 
   final MusicDatabase database;
   final LocalMusicRepository music;
@@ -41,12 +45,37 @@ class AppDependencies {
   late final lyrics = LyricsController(music);
   late final statistics = StatisticsController(music);
   late final playback = PlaybackController(music, audio: audio);
-  late final radxa = RadxaClient.production(connections);
-  late final device = DeviceController(
-    connections: connections,
-    pairing: pairing,
-    client: radxa,
-  );
+  late final radxa =
+      _providedDevice?.client ?? RadxaClient.production(connections);
+  final DeviceController? _providedDevice;
+  late final device =
+      _providedDevice ??
+      DeviceController(
+        connections: connections,
+        pairing: pairing,
+        client: radxa,
+      );
+
+  /// Explicit composition seam; adapters are supplied by tests, never discovered
+  /// or activated by a production flag. All controllers share the same database.
+  @visibleForTesting
+  static AppDependencies forTesting({
+    required MusicDatabase database,
+    required LocalMusicRepository music,
+    required DeviceController device,
+    AudioService? audio,
+  }) {
+    return AppDependencies._(
+      database,
+      music,
+      device.connections,
+      device.pairing,
+      null,
+      audio,
+      DevelopmentAudioRegistration(),
+      device,
+    );
+  }
 
   static Future<AppDependencies> create({
     MusicDatabase? database,

@@ -2,6 +2,16 @@
 
 Flutter/Dart companion application for a standalone Radxa MP3 player. Development follows MVC and one reviewed increment at a time.
 
+Run the normal debug app with the six existing WAV test songs:
+
+```powershell
+flutter run -d chrome --web-port=52848
+```
+
+Debug startup automatically registers the existing bundled test audio. With no playlists, the Library initially shows **Songs**, including **Track 1–6**; select a track, then press **Play**. VS Code also has a **CTA2000 Chrome** launch configuration. Fully stop/restart after updating startup code; hot reload does not rerun registration. Port 52848 stays fixed for persistence.
+
+If the WAVs have not been staged on this computer, use `.\run_test_music.cmd` to copy the unchanged local `Music/` files into ignored Flutter assets and launch. Release/profile builds keep registration off by default; an explicit `ENABLE_DEVELOPMENT_AUDIO` define overrides the startup default. No audio is pushed to Git. See [WAV testing](doc/WAV-testing.md).
+
 ## Increment 1: verified screen inventory
 
 Verified against all 22 PNGs in `doc/WireFrame/`. Alternate Library, Playlist Details, Add Music, and Now Playing images represent the same destinations. The combined download/record design is also an Add Music variant. There are **17 distinct screens**.
@@ -454,3 +464,61 @@ Increment 4 remains **Partial — Awaiting MP3 File**; actual playback stays **N
 Suggested commit message: `feat: implement approved Flutter frontend wireframes`.
 
 Stopped after Increment 6. No commit, push, or Increment 7 work was performed.
+
+## Increment 7 — Full application integration
+
+The production screens now use the controllers owned by AppDependencies. Library search/sort/refresh, playlist creation and occurrence-based editing/reordering/removal, exact manual lyrics saving/clearing, shared playback controls/queue/mini-player, and persisted listening statistics are connected. All 17 routes, four primary tabs, origin-aware navigation, MVC, SQLite schema, and Midnight Crimson styling are preserved.
+
+See [the complete Increment 7 report](doc/Increment7-report.md) for the file inventory, screen integration matrix, actual verification outcomes, limitations, and manual steps.
+
+### Working offline behavior
+
+- A fresh database shows an empty library; production does not seed fixtures. Existing registered songs and playlists load from SQLite. Search and sort use LibraryController. Recents and Date added both mean the existing newest-first ordering.
+- Playlists support creation, rename, description editing/clearing, addition of existing songs, duplicate occurrences, removal by entry ID, drag/up/down reorder, and deletion without removing songs. A partial two-field edit explicitly identifies a committed rename and a failed description save rather than claiming an atomic edit.
+- Lyrics preserve exact multiline Unicode and whitespace. Empty text is saved as empty text; explicit Clear saves null. Forms retain failed drafts, prevent double submission, and close only after successful persistence. Cancel before submission discards edits.
+- Confirmed song deletion uses the existing atomic database operation and preserves physical audio. An affected playback queue is subsequently stopped/cleared. **A later playback-cleanup failure is reported separately and never presented as a database rollback.**
+- Song taps select the visible-library or ordered-playlist queue and open Now Playing without autoplay on queue replacement. Explicit playlist Play requests playback after selection succeeds. Queue sheets preserve duplicate indexes; all transport/timing UI uses PlaybackController. Missing audio and initialization failures stay distinct. No listening history is generated.
+- Statistics uses actual saved history and the existing four calendar periods. Counts and exact listening duration remain controller results. The chart is explicitly limited to the latest up to 20 returned sessions; it is not a complete period series. Unsupported artist ranking, streaks, and export remain unavailable.
+
+### Device and development boundaries
+
+Device views distinguish saved trust, unavailable/disconnected/error states, and verified hardware. Test-only state cannot appear as authenticated hardware or supply verified telemetry. Supported local settings/forgetting and guarded connection/status actions forward to DeviceController; production discovery, pairing, identity verification, and authenticated communication remain unavailable. Local forgetting does not guarantee remote revocation or removal of OS Bluetooth bonding. Browser storage does not validate mobile secure trust.
+
+Add Music URL drafts/paste and recording metadata drafts remain presentation-only. Imports, downloading/yt-dlp, recording, recording saves, synchronization, remote files, headset management, and unsupported hardware settings remain unavailable. Album/year/genre drafts do not alter the schema.
+
+The isolated frontend gallery and original local-audio development harness remain separate. AppDependencies has an explicit test-only injection seam; production has no fixture/test-authentication activation flag. A browser-only integrated-app mode lives in the test target and uses a unique isolated database. It never seeds the normal application database.
+
+### Reproduce integration verification
+
+Use the complete formatting/analysis/test/four-build/browser sequence in the Increment 6 verification section above, adding:
+
+```powershell
+node --check test/browser/integrated_ui_verify.cjs
+flutter test --no-pub --reporter expanded test/frontend_integration_test.dart
+```
+
+The full suite contains **248 tests**, retaining all 217 previous tests and adding 31 SQLite-backed integration cases. The browser runner now exercises actual playlist and lyrics forms and verifies persistence after reload at the same origin, along with persisted statistics, tabs, and device restrictions. The visual runner captures 17 production, 17 isolated gallery, and 17 SQLite-integrated test screens under ignored `build/increment7-visual/`; its third server uses port 52847. Actual results and qualitative inspection findings are recorded in the report.
+
+Final Increment 7 verification on November 17, 2026:
+
+| Check | Actual result |
+| --- | --- |
+| Formatting / analysis | Passed; 80 files, zero pending format changes; no analysis issues |
+| Full Flutter suite | Passed; all 248 tests |
+| All four established web builds | Passed |
+| Real Chrome original persistence/security checks | Passed; seeded/restored at the same local origin |
+| Real Chrome integrated UI | Passed; playlist create/rename/description clear/song addition, exact Unicode lyrics, persisted statistics, all four tabs, same-origin reload |
+| Production fixture isolation / audio harness | Passed; fresh normal library empty, no fixture leakage; unchanged harness idle and Awaiting MP3 File |
+| Rendered capture and qualitative review | 51 screen sets, 132 frames; all 17 integrated top views and selected lower/production/gallery sections inspected |
+| Browser script syntax / `git diff --check` | Passed |
+| Protected implementations and six WAV hashes | Unchanged |
+
+One full test run timed out after large wall-clock gaps; its targeted rerun and final full 248-test run passed. Browser driver fixes for merged semantics and keyboard clearing are documented in the report. No failed or unexecuted check is counted as successful. Increment 7 is complete within its approved integration scope.
+
+For a manual isolated fixture session, run the persistence-probe entry point on port 52842 and open `http://localhost:52842/?integrationApp=true&run=2026111707`. Preserve that exact origin for reloads. Only this test entry seeds two metadata-only songs/history rows. Add `&cleanup=true` afterwards to delete its isolated database. Existing production data and mobile device trust are separate.
+
+Increment 4 remains **Partial — Awaiting MP3 File**. Real MP3 playback remains **Not Tested — Awaiting MP3 File**. Physical Radxa communication and native mobile/secure-storage acceptance remain unverified. No audio has been generated, downloaded, converted, renamed, or changed.
+
+Suggested commit message: `feat: integrate Flutter frontend with application controllers`.
+
+Stopped after Increment 7 implementation, verification, and reporting. No commit, push, or Increment 8 work was performed.

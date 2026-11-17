@@ -24,8 +24,14 @@ import 'package:flutter/widgets.dart';
 import 'package:sqflite_common_ffi_web/sqflite_ffi_web.dart';
 import 'package:web/web.dart' as web;
 
+import 'integrated_app.dart';
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  if (Uri.base.queryParameters['integrationApp'] == 'true') {
+    await runIntegratedBrowserApp();
+    return;
+  }
   MusicDatabase? database;
   JsonHttpClient? http;
   final controllers = <MusicController<Object?>>[];

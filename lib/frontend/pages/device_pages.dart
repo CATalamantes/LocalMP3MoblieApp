@@ -7,6 +7,66 @@ import '../widgets/design_widgets.dart';
 import '../widgets/draft_editors.dart';
 import '../widgets/presentation.dart';
 import '../widgets/unknown_meter.dart';
+import '../widgets/application_binding.dart';
+import '../../backend/services/device/device_contracts.dart';
+import '../../backend/controllers/device_controller.dart';
+import '../../backend/controllers/controller_state.dart';
+
+class DeviceStatePanel extends StatelessWidget {
+  const DeviceStatePanel({super.key, required this.data});
+  final ScreenPresentation data;
+  @override
+  Widget build(BuildContext context) {
+    final state = data.deviceData;
+    final trust = state?.trustedDevice;
+    final verified = state?.hardwareAuthenticated == true;
+    final label = state?.testOnly == true
+        ? 'Test-only state · Not authenticated hardware'
+        : verified
+        ? 'Authenticated hardware'
+        : switch (state?.phase) {
+            DevicePhase.noTrustedDevice => 'No trusted device',
+            DevicePhase.trustedDeviceSaved => 'Saved trust · Not connected',
+            DevicePhase.connecting ||
+            DevicePhase.reconnecting => 'Connecting · Not authenticated',
+            DevicePhase.forgetting => 'Removing local trust…',
+            DevicePhase.error => 'Device connection error',
+            _ => 'Device unavailable · Not authenticated',
+          };
+    return SurfaceCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Text('MP3 Capsule', style: titleStyle),
+          const SizedBox(height: 8),
+          Text(label, style: mutedStyle),
+          if (trust != null) ...[
+            const SizedBox(height: 8),
+            Text('Saved device ID: ${trust.deviceId}', style: mutedStyle),
+            Text('HTTPS host: ${trust.baseUri.host}', style: mutedStyle),
+          ],
+          if (verified && data.device != null)
+            Text(
+              'Verified capabilities: ${data.device!.capabilities.operations.join(', ')}',
+              style: mutedStyle,
+            ),
+          if (data.device != null)
+            Text(
+              'Battery: ${data.device!.batteryPercent == null ? 'Unavailable' : '${data.device!.batteryPercent}%'} · Storage: ${_bytes(data.device!.storageBytes)}',
+              style: mutedStyle,
+            ),
+          if (data.errorMessage != null)
+            Text(data.errorMessage!, style: mutedStyle),
+          if (!verified)
+            const Text(
+              'Production pairing and authenticated connections remain unavailable.',
+              style: mutedStyle,
+            ),
+        ],
+      ),
+    );
+  }
+}
 
 String _bytes(int? value) => value == null
     ? 'Unavailable'
@@ -19,21 +79,23 @@ class DeviceOverviewPage extends StatelessWidget {
   Widget build(BuildContext context) => PageBody(
     screen: AppScreen.device,
     children: [
+      if (data.integrated) DeviceStatePanel(data: data),
       const Text('Hardware status and playback pipeline', style: mutedStyle),
       const SizedBox(height: 20),
-      const SurfaceCard(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            SettingsRow(
-              title: 'MP3 Capsule',
-              subtitle: 'No authenticated device connected',
-              icon: Icons.memory,
-            ),
-            StatusPill('Device unavailable'),
-          ],
+      if (!data.integrated)
+        const SurfaceCard(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              SettingsRow(
+                title: 'MP3 Capsule',
+                subtitle: 'No authenticated device connected',
+                icon: Icons.memory,
+              ),
+              StatusPill('Device unavailable'),
+            ],
+          ),
         ),
-      ),
       const SectionTitle('CONNECTIVITY & STORAGE'),
       const SurfaceCard(
         child: Column(
@@ -112,26 +174,28 @@ class ConnectionsPage extends StatelessWidget {
   Widget build(BuildContext context) => PageBody(
     screen: AppScreen.connections,
     children: [
-      SurfaceCard(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const SettingsRow(
-              title: 'MP3 Capsule',
-              subtitle: 'No authenticated connection',
-              icon: Icons.memory,
-            ),
-            const StatusPill('Single trusted device'),
-            const SizedBox(height: 12),
-            Text(
-              data.device == null
-                  ? 'No trusted-device information loaded.'
-                  : 'Design sample · ${data.device!.deviceId}',
-              style: mutedStyle,
-            ),
-          ],
+      if (data.integrated) DeviceStatePanel(data: data),
+      if (!data.integrated)
+        SurfaceCard(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const SettingsRow(
+                title: 'MP3 Capsule',
+                subtitle: 'No authenticated connection',
+                icon: Icons.memory,
+              ),
+              const StatusPill('Single trusted device'),
+              const SizedBox(height: 12),
+              Text(
+                data.device == null
+                    ? 'No trusted-device information loaded.'
+                    : 'Design sample · ${data.device!.deviceId}',
+                style: mutedStyle,
+              ),
+            ],
+          ),
         ),
-      ),
       const SectionTitle('CONNECTION METHODS'),
       SurfaceCard(
         child: Column(
@@ -147,7 +211,37 @@ class ConnectionsPage extends StatelessWidget {
                 onPressed: () => showDraftEditor(
                   context,
                   title: 'Connection settings',
-                  fields: {'HTTPS endpoint': ''},
+                  fields: {
+                    'HTTPS endpoint':
+                        data.deviceData?.trustedDevice?.baseUri.toString() ??
+                        '',
+                  },
+                  onSave:
+                      !data.integrated || data.deviceData?.trustedDevice == null
+                      ? null
+                      : (fields) async {
+                          final a = ApplicationScope.of(context)!;
+                          final trust = data.deviceData!.trustedDevice!;
+                          final endpoint = Uri.tryParse(
+                            fields['HTTPS endpoint']!,
+                          );
+                          if (endpoint == null ||
+                              endpoint.scheme != 'https' ||
+                              endpoint.host.isEmpty ||
+                              endpoint.userInfo.isNotEmpty) {
+                            throw const ControllerFailure(
+                              ControllerFailureKind.invalidInput,
+                              'Enter a valid HTTPS endpoint without credentials.',
+                            );
+                          }
+                          await a.dependencies.device.updateConnectionSettings(
+                            DeviceSettings(
+                              deviceId: trust.deviceId,
+                              baseUri: endpoint,
+                              autoReconnect: trust.autoReconnect,
+                            ),
+                          );
+                        },
                 ),
               ),
             ),
@@ -183,28 +277,51 @@ class ConnectionsPage extends StatelessWidget {
         ),
       ),
       const SectionTitle('CONNECTION PREFERENCES'),
-      const SurfaceCard(
+      SurfaceCard(
         child: Column(
           children: [
             SettingsRow(
               title: 'Automatically reconnect',
-              subtitle: 'Preference not loaded',
-              trailing: Switch(value: false, onChanged: null),
+              subtitle:
+                  data.integrated && data.deviceData?.trustedDevice != null
+                  ? 'Saved preference; startup does not initiate authentication.'
+                  : 'Preference not loaded',
+              trailing: Switch(
+                value: data.deviceData?.trustedDevice?.autoReconnect ?? false,
+                onChanged:
+                    !data.integrated ||
+                        data.deviceData?.trustedDevice == null ||
+                        data.mode == PresentationMode.loading
+                    ? null
+                    : (value) {
+                        final a = ApplicationScope.of(context)!;
+                        final trust = data.deviceData!.trustedDevice!;
+                        a.quietly(
+                          () => a.dependencies.device.updateConnectionSettings(
+                            DeviceSettings(
+                              deviceId: trust.deviceId,
+                              baseUri: trust.baseUri,
+                              autoReconnect: value,
+                            ),
+                          ),
+                        );
+                      },
+              ),
             ),
-            Divider(),
-            SettingsRow(
+            const Divider(),
+            const SettingsRow(
               title: 'Prefer Wi-Fi when available',
               subtitle: 'Setting unavailable',
               trailing: Switch(value: false, onChanged: null),
             ),
-            Divider(),
-            SettingsRow(
+            const Divider(),
+            const SettingsRow(
               title: 'Allow Bluetooth connection',
               subtitle: 'Authenticated control only · Unavailable',
               trailing: Switch(value: false, onChanged: null),
             ),
-            Divider(),
-            SettingsRow(
+            const Divider(),
+            const SettingsRow(
               title: 'Automatic device discovery',
               subtitle: 'Discovery unavailable',
               trailing: Switch(value: false, onChanged: null),
@@ -215,18 +332,86 @@ class ConnectionsPage extends StatelessWidget {
       const SectionTitle('HARDWARE UTILITIES'),
       const ActionPill('Find My MP3 Player', icon: Icons.volume_up_outlined),
       const SizedBox(height: 12),
-      const ActionPill('Force Reconnect', icon: Icons.sync),
+      if (!data.integrated)
+        const ActionPill('Force Reconnect', icon: Icons.sync)
+      else
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            ActionPill(
+              'Reload saved device',
+              icon: Icons.refresh,
+              onPressed: data.mode == PresentationMode.loading
+                  ? null
+                  : () {
+                      final a = ApplicationScope.of(context)!;
+                      a.quietly(a.dependencies.device.loadSavedDevice);
+                    },
+            ),
+            ActionPill(
+              'Force Reconnect',
+              icon: Icons.sync,
+              onPressed:
+                  data.deviceData?.trustedDevice == null ||
+                      data.mode == PresentationMode.loading
+                  ? null
+                  : () {
+                      final a = ApplicationScope.of(context)!;
+                      a.quietly(a.dependencies.device.connect);
+                    },
+            ),
+            ActionPill(
+              'Disconnect',
+              icon: Icons.link_off,
+              onPressed: data.mode == PresentationMode.loading
+                  ? null
+                  : () {
+                      final a = ApplicationScope.of(context)!;
+                      a.quietly(a.dependencies.device.disconnect);
+                    },
+            ),
+            ActionPill(
+              'Refresh verified status',
+              icon: Icons.info_outline,
+              onPressed:
+                  data.deviceData?.hardwareAuthenticated != true ||
+                      data.mode == PresentationMode.loading
+                  ? null
+                  : () {
+                      final a = ApplicationScope.of(context)!;
+                      a.quietly(a.dependencies.device.refreshDeviceInfo);
+                    },
+            ),
+          ],
+        ),
       const SizedBox(height: 12),
       ActionPill(
         'Forget Device',
         icon: Icons.link_off,
-        onPressed: () => showUnavailableConfirmation(
-          context,
-          title: 'Forget device?',
-          message: 'Forgetting is not connected. No trust or credentials will be removed. Local forgetting cannot prove remote revocation.',
-          action: 'Forget',
-          enabled: data.device != null,
-        ),
+        onPressed: data.integrated
+            ? data.mode == PresentationMode.loading
+                  ? null
+                  : () {
+                      final a = ApplicationScope.of(context)!;
+                      confirmAction(
+                        context,
+                        title: 'Forget local device trust?',
+                        message: 'Remove locally saved trust and credentials. This does not guarantee removal of remote authorization or operating-system Bluetooth bonding.',
+                        action: 'Forget',
+                        onConfirm: () async {
+                          await a.dependencies.device.forgetDevice();
+                          return 'Local device trust removed. Remote authorization and OS Bluetooth bonding were not verified or revoked.';
+                        },
+                      );
+                    }
+            : () => showUnavailableConfirmation(
+                context,
+                title: 'Forget device?',
+                message: 'Forgetting is not connected. No trust or credentials will be removed. Local forgetting cannot prove remote revocation.',
+                action: 'Forget',
+                enabled: data.device != null,
+              ),
       ),
       const SizedBox(height: 16),
       PresentationNotice(
@@ -251,6 +436,7 @@ class _MusicSyncPageState extends State<MusicSyncPage> {
   Widget build(BuildContext context) => PageBody(
     screen: AppScreen.sync,
     children: [
+      if (widget.data.integrated) DeviceStatePanel(data: widget.data),
       const SurfaceCard(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -336,6 +522,7 @@ class StoragePage extends StatelessWidget {
     return PageBody(
       screen: AppScreen.storage,
       children: [
+        if (data.integrated) DeviceStatePanel(data: data),
         SurfaceCard(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -433,6 +620,7 @@ class _FileManagerPageState extends State<FileManagerPage> {
   Widget build(BuildContext context) => PageBody(
     screen: AppScreen.files,
     children: [
+      if (widget.data.integrated) DeviceStatePanel(data: widget.data),
       const SurfaceCard(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -552,6 +740,7 @@ class BluetoothAudioPage extends StatelessWidget {
   Widget build(BuildContext context) => PageBody(
     screen: AppScreen.bluetoothAudio,
     children: [
+      if (data.integrated) DeviceStatePanel(data: data),
       const SurfaceCard(
         child: Text(
           'Wireless headphones connect to the player’s audio output. This is separate from the phone-to-player BLE control connection.',
@@ -643,6 +832,7 @@ class BatteryDisplayPage extends StatelessWidget {
   Widget build(BuildContext context) => PageBody(
     screen: AppScreen.batteryDisplay,
     children: [
+      if (data.integrated) DeviceStatePanel(data: data),
       const SectionTitle('BATTERY STATUS & POWER'),
       SurfaceCard(
         child: Column(
@@ -758,6 +948,7 @@ class AboutDevicePage extends StatelessWidget {
   Widget build(BuildContext context) => PageBody(
     screen: AppScreen.aboutDevice,
     children: [
+      if (data.integrated) DeviceStatePanel(data: data),
       const SurfaceCard(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,

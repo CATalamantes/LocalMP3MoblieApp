@@ -47,13 +47,14 @@ async function serve(root, port) {
   return server;
 }
 (async () => {
-  const output = path.resolve('build/increment6-visual'); fs.mkdirSync(output,{recursive:true});
+  const output = path.resolve('build/increment7-visual'); fs.mkdirSync(output,{recursive:true});
   const profile = fs.mkdtempSync(path.join(os.tmpdir(),'cta2000-visual-'));
   const servers = []; let browser, socket;
   const manifest = {viewport:{width:390,height:844,textScale:1},screens:[]};
   try {
     servers.push(await serve('build/frontend-preview',52845));
     servers.push(await serve('build/web',52846));
+    servers.push(await serve('build/browser-verification',52847));
     browser = spawn(process.env.CHROME_PATH || 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
       ['--headless=new','--disable-gpu','--no-first-run','--remote-debugging-port=0',`--user-data-dir=${profile}`,'about:blank'],
       {windowsHide:true,stdio:'ignore'});
@@ -78,10 +79,11 @@ async function serve(root, port) {
       return value.result?.value;
     }
     await call('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});
-    for (const variant of ['production','preview']) {
+    const integratedRun=Date.now();
+    for (const variant of ['production','preview','integrated']) {
       for (const [screen,title,wireframe] of screens) {
         await evaluate("document.documentElement.setAttribute('data-old-visual','true')");
-        const url=variant==='preview' ? `http://127.0.0.1:52845/?screen=${screen}&state=ready`
+        const url=variant==='integrated' ? `http://127.0.0.1:52847/?integrationApp=true&visual=true&run=${integratedRun}&screen=${screen}` : variant==='preview' ? `http://127.0.0.1:52845/?screen=${screen}&state=ready`
           : `http://127.0.0.1:52846/?capture=${screen}#/${route[screen]}`;
         await call('Page.navigate',{url});
         let text='';
@@ -90,7 +92,7 @@ async function serve(root, port) {
           const old=await evaluate("document.documentElement.hasAttribute('data-old-visual')");
           text=await evaluate('document.body.innerText');
           const pageTitle=await evaluate('document.title');
-          if(!old && text?.includes(title) && (variant==='production' || pageTitle==='CTA2000 Design Preview'))break;
+          if(!old && text?.includes(title) && (variant!=='preview' || pageTitle==='CTA2000 Design Preview'))break;
           await delay(100);
         }
         assert.ok(text?.includes(title),`Missing ${variant} ${screen}`);
@@ -108,13 +110,15 @@ async function serve(root, port) {
         manifest.screens.push(entry); console.log('CAPTURED',variant,screen,entry.files.length);
       }
     }
-    assert.equal(manifest.screens.length,34);
+    await call('Page.navigate',{url:`http://127.0.0.1:52847/?integrationApp=true&cleanup=true&run=${integratedRun}`});await delay(500);
+    assert.equal(JSON.parse(await evaluate("document.documentElement.getAttribute('data-integration')")).status,'cleaned');
+    assert.equal(manifest.screens.length,51);
     fs.writeFileSync(path.join(output,'manifest.json'),JSON.stringify(manifest,null,2));
-    fs.writeFileSync(path.join(output,'index.html'),'<!doctype html><meta charset="utf-8"><title>Increment 6 visual review</title>'+
+    fs.writeFileSync(path.join(output,'index.html'),'<!doctype html><meta charset="utf-8"><title>Increment 7 visual review</title>'+
       '<style>body{background:#101722;color:#f5f6fa;font:14px sans-serif}section{display:flex;gap:10px;flex-wrap:wrap}img{width:195px}article{margin-bottom:30px}h2{font-size:18px}</style>'+
       manifest.screens.map(entry=>`<article><h2>${entry.variant} — ${entry.screen}</h2><p>${entry.wireframe}</p><section>`+
         entry.files.map(name=>`<a href="${name}"><img src="${name}" alt="${name}"></a>`).join('')+'</section></article>').join(''));
-    console.log('VISUAL CAPTURE PASSED: 17 production screens + 17 isolated previews; human image inspection still required.');
+    console.log('VISUAL CAPTURE PASSED: 17 production screens + 17 isolated previews + 17 SQLite-integrated screens; human image inspection still required.');
   } finally {
     socket?.close();
     if(browser && browser.exitCode===null){const closed=new Promise(resolve=>browser.once('exit',resolve));browser.kill();await Promise.race([closed,delay(3000)]);}

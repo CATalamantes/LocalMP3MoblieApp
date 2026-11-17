@@ -50,6 +50,7 @@ class DevelopmentAudioRegistrar {
         final title = map['title'] as String;
         final artist = map['artist_name'] as String;
         final path = map['asset_path'] as String;
+        final format = path.toLowerCase().endsWith('.wav') ? 'WAV' : 'MP3';
         final duration = map['duration_ms'] == null
             ? 0
             : map['duration_ms'] as int;
@@ -57,7 +58,8 @@ class DevelopmentAudioRegistrar {
             title.trim().isEmpty ||
             duration < 0 ||
             !path.startsWith('assets/audio/') ||
-            !path.toLowerCase().endsWith('.mp3') ||
+            !(path.toLowerCase().endsWith('.mp3') ||
+                path.toLowerCase().endsWith('.wav')) ||
             !ids.add(id) ||
             !paths.add(path)) {
           throw const FormatException('Invalid or duplicate catalog entry');
@@ -69,7 +71,7 @@ class DevelopmentAudioRegistrar {
             title: title,
             artistName: artist,
             durationMs: duration,
-            audioFormat: 'MP3',
+            audioFormat: format,
             filePath: uri.toString(),
             dateAdded: _clock().toUtc(),
           ),

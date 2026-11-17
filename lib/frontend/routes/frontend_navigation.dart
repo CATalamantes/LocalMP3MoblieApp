@@ -5,15 +5,22 @@ import '../widgets/presentation.dart';
 import 'app_screen.dart';
 
 class NavigationOrigin {
-  const NavigationOrigin(this.route, this.controller);
+  const NavigationOrigin(this.route, this.controller, {this.onSelect});
   final Route<dynamic> route;
   final NavigationController controller;
+  final ValueChanged<int>? onSelect;
 }
 
 class FrontendRouteArguments {
-  const FrontendRouteArguments({this.origin, this.presentation});
+  const FrontendRouteArguments({
+    this.origin,
+    this.presentation,
+    this.songId,
+    this.playlistId,
+  });
   final NavigationOrigin? origin;
   final ScreenPresentation? presentation;
+  final String? songId, playlistId;
 }
 
 class PageNavigationScope extends InheritedWidget {
@@ -36,6 +43,8 @@ void openScreen(
   BuildContext context,
   AppScreen screen, {
   ScreenPresentation? presentation,
+  String? songId,
+  String? playlistId,
 }) {
   final scope = PageNavigationScope.of(context);
   Navigator.of(context).pushNamed(
@@ -43,6 +52,14 @@ void openScreen(
     arguments: FrontendRouteArguments(
       origin: scope?.origin,
       presentation: presentation ?? scope?.presentation,
+      songId:
+          songId ??
+          presentation?.song?.songId ??
+          scope?.presentation.song?.songId,
+      playlistId:
+          playlistId ??
+          presentation?.playlist?.playlistId ??
+          scope?.presentation.playlist?.playlistId,
     ),
   );
 }
@@ -51,7 +68,7 @@ void selectPrimary(BuildContext context, int index) {
   final origin = PageNavigationScope.of(context)?.origin;
   if (origin != null && origin.route.isActive) {
     Navigator.of(context).popUntil((route) => identical(route, origin.route));
-    origin.controller.selectTab(index);
+    (origin.onSelect ?? origin.controller.selectTab)(index);
   } else {
     Navigator.of(
       context,

@@ -5,6 +5,10 @@ import '../routes/app_screen.dart';
 import '../routes/frontend_navigation.dart';
 import '../theme/app_theme.dart';
 import 'presentation.dart';
+import 'application_binding.dart';
+import 'draft_editors.dart';
+import '../../backend/controllers/playback_controller.dart';
+import '../../backend/services/audio/audio_service.dart';
 
 const headingStyle = TextStyle(
   fontSize: 22,
@@ -404,7 +408,9 @@ class SongRow extends StatelessWidget {
     this.reorder = false,
     this.rank,
     this.trailing,
+    this.entryId,
   });
+  final String? entryId;
   final Song song;
   final VoidCallback? onTap;
   final bool reorder;
@@ -447,6 +453,9 @@ class SongRow extends StatelessWidget {
           IconButton(
             onPressed: reorder
                 ? null
+                : PageNavigationScope.of(context)?.presentation.integrated ==
+                      true
+                ? () => _liveSongActions(context)
                 : () => showModalBottomSheet<void>(
                     context: context,
                     isScrollControlled: true,
@@ -483,76 +492,258 @@ class SongRow extends StatelessWidget {
       ],
     ),
   );
+  void _liveSongActions(BuildContext context) {
+    final actions = ApplicationScope.of(context)!;
+    final origin = PageNavigationScope.of(context)?.origin;
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (sheetContext) => SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(song.title, style: headingStyle),
+              TextButton(
+                onPressed: () {
+                  Navigator.pop(sheetContext);
+                  Navigator.of(context).pushNamed(
+                    AppScreen.songDetails.route,
+                    arguments: FrontendRouteArguments(
+                      origin: origin,
+                      songId: song.songId,
+                    ),
+                  );
+                },
+                child: const Text('Lyrics & Song Details'),
+              ),
+              TextButton(
+                onPressed: () {
+                  Navigator.pop(sheetContext);
+                  final occurrence = entryId;
+                  confirmAction(
+                    context,
+                    title: occurrence == null
+                        ? 'Remove song?'
+                        : 'Remove playlist entry?',
+                    message: occurrence == null
+                        ? 'Delete this song record, its history and playlist entries? The physical audio file is preserved. A queue containing this song will be stopped and cleared.'
+                        : 'Remove only this occurrence? Other occurrences and the song are preserved.',
+                    action: 'Remove',
+                    onConfirm: () async {
+                      if (occurrence != null) {
+                        await actions.dependencies.playlists.removeEntry(
+                          occurrence,
+                        );
+                        return 'Playlist entry removed. Other occurrences preserved.';
+                      }
+                      return (await actions.removeSong(song.songId)).message;
+                    },
+                  );
+                },
+                child: Text(
+                  entryId == null ? 'Remove song' : 'Remove this occurrence',
+                ),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(sheetContext),
+                child: const Text('Close'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+String playbackTime(Duration? value) {
+  if (value == null) return '—:—';
+  final hours = value.inHours;
+  return '${hours == 0 ? '' : '$hours:'}${(hours == 0 ? value.inMinutes : value.inMinutes.remainder(60)).toString().padLeft(hours == 0 ? 1 : 2, '0')}:${value.inSeconds.remainder(60).toString().padLeft(2, '0')}';
+}
+
+String playbackLabel(ScreenPresentation data) {
+  if (data.playbackError != null) return data.playbackError!;
+  if (data.playbackBusy) return 'Loading local audio\u2026';
+  final state = data.playback;
+  if (state?.capability == PlaybackCapability.unavailable) {
+    return 'Playback unavailable · Awaiting MP3 File';
+  }
+  if (state?.selectedSong == null) {
+    return data.availableSongs.isNotEmpty
+        ? 'Select a song to play'
+        : 'No track selected \u00b7 Awaiting MP3 File';
+  }
+  if (state!.isPlaying) return 'Playing locally';
+  if (state.isPaused) return 'Paused \u00b7 Local audio';
+  return switch (state.audio.phase) {
+    AudioPhase.loading => 'Loading local audio\u2026',
+    AudioPhase.buffering => 'Buffering local audio\u2026',
+    AudioPhase.completed => 'Playback completed',
+    _ => 'Playback stopped \u00b7 Select Play to load audio',
+  };
 }
 
 class PlaybackControls extends StatelessWidget {
   const PlaybackControls({super.key, this.compact = false});
   final bool compact;
   @override
-  Widget build(BuildContext context) => Column(
-    children: [
-      Semantics(
-        label: 'Playback position and duration unavailable',
-        child: const ExcludeSemantics(child: Slider(value: 0, onChanged: null)),
-      ),
-      const Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text('—:—', style: mutedStyle),
-          Text('—:—', style: mutedStyle),
-        ],
-      ),
-      const SizedBox(height: 12),
-      Wrap(
-        alignment: WrapAlignment.center,
-        crossAxisAlignment: WrapCrossAlignment.center,
-        spacing: compact ? 0 : 4,
-        children: [
-          const IconButton(
-            onPressed: null,
-            tooltip: 'Shuffle unavailable',
-            icon: Icon(Icons.shuffle),
+  Widget build(BuildContext context) {
+    final data = PageNavigationScope.of(context)?.presentation;
+    final actions = data?.integrated == true
+        ? ApplicationScope.of(context)
+        : null;
+    final playback = data?.playback;
+    final loaded =
+        playback != null &&
+        {
+          AudioPhase.ready,
+          AudioPhase.buffering,
+          AudioPhase.completed,
+        }.contains(playback.audio.phase) &&
+        playback.audio.error == null;
+    final duration = loaded ? playback.duration : null;
+    final position = loaded ? playback.position : null;
+    final canOperate =
+        actions != null &&
+        playback?.selectedSong != null &&
+        playback?.capability == PlaybackCapability.local &&
+        !data!.playbackBusy;
+    final canSeek = canOperate && duration != null && duration > Duration.zero;
+    return Column(
+      children: [
+        Semantics(
+          label: actions == null
+              ? 'Playback position and duration unavailable'
+              : 'Playback position ${playbackTime(position)} of ${playbackTime(duration)}',
+          child: Slider(
+            key: const ValueKey('playback-seek'),
+            value: canSeek
+                ? (position!.inMilliseconds / duration.inMilliseconds).clamp(
+                    0.0,
+                    1.0,
+                  )
+                : 0,
+            onChanged: canSeek ? (_) {} : null,
+            onChangeEnd: canSeek
+                ? (value) => actions.quietly(
+                    () => actions.dependencies.playback.seek(
+                      Duration(
+                        milliseconds: (value * duration.inMilliseconds).round(),
+                      ),
+                    ),
+                  )
+                : null,
           ),
-          const IconButton(
-            onPressed: null,
-            tooltip: 'Previous unavailable',
-            icon: Icon(Icons.skip_previous),
-          ),
-          Container(
-            margin: const EdgeInsets.symmetric(horizontal: 6),
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: AppTheme.crimson.withValues(alpha: .4),
-            ),
-            child: const IconButton(
+        ),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(playbackTime(position), style: mutedStyle),
+            Text(playbackTime(duration), style: mutedStyle),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Wrap(
+          alignment: WrapAlignment.center,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          spacing: compact ? 0 : 4,
+          children: [
+            const IconButton(
               onPressed: null,
-              tooltip: 'Playback unavailable',
-              iconSize: 38,
-              padding: EdgeInsets.all(12),
-              icon: Icon(Icons.play_arrow),
+              tooltip: 'Shuffle unavailable',
+              icon: Icon(Icons.shuffle),
             ),
-          ),
-          const IconButton(
-            onPressed: null,
-            tooltip: 'Next unavailable',
-            icon: Icon(Icons.skip_next),
-          ),
-          const IconButton(
-            onPressed: null,
-            tooltip: 'Repeat unavailable',
-            icon: Icon(Icons.repeat),
-          ),
-        ],
-      ),
-    ],
-  );
+            IconButton(
+              key: const ValueKey('playback-previous'),
+              onPressed: canOperate
+                  ? () =>
+                        actions.quietly(actions.dependencies.playback.previous)
+                  : null,
+              tooltip: actions == null ? 'Previous unavailable' : 'Previous',
+              icon: const Icon(Icons.skip_previous),
+            ),
+            Container(
+              margin: const EdgeInsets.symmetric(horizontal: 6),
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: AppTheme.crimson.withValues(alpha: canOperate ? 1 : .4),
+              ),
+              child: IconButton(
+                key: const ValueKey('playback-toggle'),
+                onPressed: canOperate
+                    ? () => actions.quietly(
+                        playback!.isPlaying
+                            ? actions.dependencies.playback.pause
+                            : actions.dependencies.playback.play,
+                      )
+                    : null,
+                tooltip: actions == null
+                    ? 'Playback unavailable'
+                    : playback?.isPlaying == true
+                    ? 'Pause'
+                    : 'Play',
+                iconSize: 38,
+                padding: const EdgeInsets.all(12),
+                icon: Icon(
+                  playback?.isPlaying == true ? Icons.pause : Icons.play_arrow,
+                ),
+              ),
+            ),
+            IconButton(
+              key: const ValueKey('playback-next'),
+              onPressed: canOperate
+                  ? () => actions.quietly(actions.dependencies.playback.next)
+                  : null,
+              tooltip: actions == null ? 'Next unavailable' : 'Next',
+              icon: const Icon(Icons.skip_next),
+            ),
+            const IconButton(
+              onPressed: null,
+              tooltip: 'Repeat unavailable',
+              icon: Icon(Icons.repeat),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
 }
 
 class MiniPlayer extends StatelessWidget {
   const MiniPlayer({super.key});
   @override
   Widget build(BuildContext context) {
-    final song = PageNavigationScope.of(context)?.presentation.song;
+    final actions = ApplicationScope.of(context);
+    if (actions != null) {
+      return AnimatedBuilder(
+        animation: Listenable.merge([
+          actions.dependencies.playback,
+          actions.dependencies.library,
+        ]),
+        builder: (context, _) {
+          final data = livePresentation(actions, AppScreen.nowPlaying);
+          return _body(context, data.song, data, actions);
+        },
+      );
+    }
+    return _body(
+      context,
+      PageNavigationScope.of(context)?.presentation.song,
+      null,
+      null,
+    );
+  }
+
+  Widget _body(
+    BuildContext context,
+    Song? song,
+    ScreenPresentation? data,
+    FrontendActions? actions,
+  ) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(10, 6, 10, 6),
       child: Material(
@@ -581,17 +772,40 @@ class MiniPlayer extends StatelessWidget {
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(fontWeight: FontWeight.w600),
                       ),
-                      const Text(
-                        'Playback not connected',
-                        style: TextStyle(fontSize: 11, color: AppTheme.muted),
+                      Text(
+                        data == null
+                            ? 'Playback not connected'
+                            : playbackLabel(data),
+                        style: const TextStyle(
+                          fontSize: 11,
+                          color: AppTheme.muted,
+                        ),
                       ),
                     ],
                   ),
                 ),
-                const IconButton(
-                  onPressed: null,
-                  tooltip: 'Playback unavailable',
-                  icon: Icon(Icons.play_arrow),
+                IconButton(
+                  key: const ValueKey('mini-player-toggle'),
+                  onPressed:
+                      data?.song == null ||
+                          data!.playbackBusy ||
+                          data.playback?.capability != PlaybackCapability.local
+                      ? null
+                      : () => actions!.quietly(
+                          data.playback!.isPlaying
+                              ? actions.dependencies.playback.pause
+                              : actions.dependencies.playback.play,
+                        ),
+                  tooltip: data == null
+                      ? 'Playback unavailable'
+                      : data.playback?.isPlaying == true
+                      ? 'Pause'
+                      : 'Play',
+                  icon: Icon(
+                    data?.playback?.isPlaying == true
+                        ? Icons.pause
+                        : Icons.play_arrow,
+                  ),
                 ),
               ],
             ),
