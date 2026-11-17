@@ -1,4 +1,5 @@
 import 'json_http_client.dart';
+import '../../models/device_models.dart';
 
 enum TransportKind { wifi, ble }
 
@@ -11,6 +12,9 @@ enum DeviceFailureKind {
   unsupported,
   cancelled,
   storage,
+  authentication,
+  protocol,
+  invalidInput,
 }
 
 class DeviceFailure implements Exception {
@@ -18,6 +22,12 @@ class DeviceFailure implements Exception {
   final DeviceFailureKind kind;
   @override
   String toString() => 'DeviceFailure(${kind.name})';
+}
+
+class DeviceCommandFailure extends DeviceFailure {
+  const DeviceCommandFailure(super.kind, {this.outcomeUnknown = false});
+  // A lost response must not cause an automatic replay of a changing command.
+  final bool outcomeUnknown;
 }
 
 /// Opaque provisioning data. Only a verifier can turn it into a trusted record.
@@ -89,15 +99,32 @@ abstract interface class CredentialStore {
 
 /// A future mobile adapter must use OS-controlled authenticated LE bonding.
 abstract interface class BondingProvisioningAdapter {
+  Future<PairingWindow?> inspectPairingWindow(
+    String deviceId,
+    RequestCancellation cancellation,
+  );
   Future<ProvisioningResult> provision({
     required String deviceId,
     required String passkey,
+    RequestCancellation? cancellation,
   });
 }
 
 abstract interface class IdentityAuthorizationVerifier {
   /// Must verify the device identity AND this phone's authorization.
-  Future<void> verifyProvisioning(ProvisioningResult result);
+  Future<void> verifyProvisioning(
+    ProvisioningResult result, {
+    RequestCancellation? cancellation,
+  });
+}
+
+abstract interface class DeviceDiscoveryAdapter {
+  Future<List<NearbyDevice>> discover(RequestCancellation cancellation);
+}
+
+abstract interface class DeviceTransferHandle {
+  Stream<DeviceTransferSnapshot> get snapshots;
+  Future<void> cancel();
 }
 
 abstract interface class DeviceTransport {
@@ -120,6 +147,7 @@ abstract interface class DeviceTransport {
 
 enum ConnectionPhase {
   disconnected,
+  connecting,
   reconnecting,
   unavailable,
   failed,

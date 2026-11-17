@@ -43,6 +43,11 @@ class ConnectionManager extends ChangeNotifier {
   );
   ConnectionSnapshot get snapshot => _snapshot;
   DeviceTransport? _active;
+  DeviceSettings? _savedSession;
+  DeviceCredentials? _secretSession;
+  String? get connectedDeviceId =>
+      _active == null ? null : _savedSession?.deviceId;
+  int get sessionGeneration => _generation;
   RequestCancellation? _operation;
   int _generation = 0;
   bool _disposed = false;
@@ -65,6 +70,8 @@ class ConnectionManager extends ChangeNotifier {
     final cancellation = _operation = RequestCancellation();
     final previous = _active;
     _active = null;
+    _savedSession = null;
+    _secretSession = null;
     // No future or injected test outcome can enable a production connection.
     if (!testOnly || _wifi == null) {
       _publish(
@@ -106,7 +113,10 @@ class ConnectionManager extends ChangeNotifier {
         return;
       }
       _publish(
-        ConnectionSnapshot(ConnectionPhase.reconnecting, testOnly: testOnly),
+        ConnectionSnapshot(
+          automatic ? ConnectionPhase.reconnecting : ConnectionPhase.connecting,
+          testOnly: testOnly,
+        ),
         generation,
       );
       for (var attempt = 0; attempt < 4; attempt++) {
@@ -118,8 +128,19 @@ class ConnectionManager extends ChangeNotifier {
           );
           if (!_current(generation)) return;
         }
+        if (!await _trustMatches(saved, secret)) {
+          if (_current(generation)) await disconnect();
+          return;
+        }
+        if (!_current(generation)) return;
         try {
           await _authenticate(_wifi, saved, secret, cancellation);
+          if (!_current(generation)) return;
+          if (!await _trustMatches(saved, secret)) {
+            await _wifi.disconnect();
+            if (_current(generation)) await disconnect();
+            return;
+          }
           if (!_current(generation)) return;
           _active = _wifi;
         } on DeviceFailure catch (error) {
@@ -134,6 +155,12 @@ class ConnectionManager extends ChangeNotifier {
             try {
               await _authenticate(ble, saved, secret, cancellation);
               if (!_current(generation)) return;
+              if (!await _trustMatches(saved, secret)) {
+                await ble.disconnect();
+                if (_current(generation)) await disconnect();
+                return;
+              }
+              if (!_current(generation)) return;
               _active = ble;
             } on DeviceFailure catch (bleError) {
               if (bleError.kind != DeviceFailureKind.transient) rethrow;
@@ -144,6 +171,8 @@ class ConnectionManager extends ChangeNotifier {
             continue;
           }
         }
+        _savedSession = saved;
+        _secretSession = secret;
         _publish(
           ConnectionSnapshot(
             ConnectionPhase.authenticated,
@@ -172,6 +201,28 @@ class ConnectionManager extends ChangeNotifier {
         ),
         generation,
       );
+    }
+  }
+
+  Future<bool> _trustMatches(
+    DeviceSettings saved,
+    DeviceCredentials secret,
+  ) async {
+    try {
+      final current = await settings.read();
+      final credential = await credentials.read();
+      return current != null &&
+          credential != null &&
+          current.deviceId == saved.deviceId &&
+          current.baseUri == saved.baseUri &&
+          current.autoReconnect == saved.autoReconnect &&
+          credential.deviceId == secret.deviceId &&
+          credential.credential == secret.credential &&
+          credential.pinnedIdentity == secret.pinnedIdentity;
+    } on DeviceFailure {
+      rethrow;
+    } catch (_) {
+      throw const DeviceFailure(DeviceFailureKind.storage);
     }
   }
 
@@ -205,6 +256,8 @@ class ConnectionManager extends ChangeNotifier {
     String operation, {
     Object? payload,
     bool largeTransfer = false,
+    Duration timeout = const Duration(seconds: 10),
+    RequestCancellation? cancellation,
   }) async {
     final transport = _active;
     if (!testOnly || transport == null) {
@@ -215,17 +268,63 @@ class ConnectionManager extends ChangeNotifier {
       throw const DeviceFailure(DeviceFailureKind.unsupported);
     }
     final generation = _generation;
-    final cancellation = _operation!;
-    final result = await Future.any([
-      transport.send(operation, payload, cancellation),
-      cancellation.cancelled.then<Object?>(
-        (_) => throw const DeviceFailure(DeviceFailureKind.cancelled),
-      ),
-    ]);
-    if (!_current(generation)) {
+    if (timeout <= Duration.zero) {
+      throw const DeviceFailure(DeviceFailureKind.invalidInput);
+    }
+    if (!await _trustMatches(_savedSession!, _secretSession!)) {
+      if (_current(generation)) await disconnect();
+      throw const DeviceFailure(DeviceFailureKind.untrusted);
+    }
+    if (!_current(generation) || (cancellation?.isCancelled ?? false)) {
       throw const DeviceFailure(DeviceFailureKind.cancelled);
     }
-    return result;
+    final request = RequestCancellation();
+    // A request timeout cancels this command, not an unrelated command/session.
+    final ended = RequestCancellation();
+    unawaited(
+      Future.any([
+        _operation!.cancelled,
+        if (cancellation != null) cancellation.cancelled,
+        ended.cancelled,
+      ]).then((_) {
+        if (!ended.isCancelled) request.cancel();
+      }),
+    );
+    try {
+      final result =
+          await Future.any([
+            transport.send(operation, payload, request),
+            request.cancelled.then<Object?>(
+              (_) => throw const DeviceFailure(DeviceFailureKind.cancelled),
+            ),
+          ]).timeout(
+            timeout,
+            onTimeout: () {
+              request.cancel();
+              throw const DeviceFailure(DeviceFailureKind.transient);
+            },
+          );
+      if (!_current(generation)) {
+        throw const DeviceFailure(DeviceFailureKind.cancelled);
+      }
+      return result;
+    } on DeviceFailure catch (failure) {
+      if ({
+            DeviceFailureKind.identity,
+            DeviceFailureKind.authentication,
+            DeviceFailureKind.authorization,
+          }.contains(failure.kind) &&
+          _current(generation)) {
+        try {
+          await rejectSession(failure.kind);
+        } catch (_) {
+          /* Preserve the security failure after invalidation. */
+        }
+      }
+      rethrow;
+    } finally {
+      ended.cancel();
+    }
   }
 
   Future<void> disconnect() async {
@@ -233,6 +332,8 @@ class ConnectionManager extends ChangeNotifier {
     final generation = ++_generation;
     final active = _active;
     _active = null;
+    _savedSession = null;
+    _secretSession = null;
     _publish(
       ConnectionSnapshot(ConnectionPhase.disconnected, testOnly: testOnly),
       generation,
@@ -240,13 +341,43 @@ class ConnectionManager extends ChangeNotifier {
     await active?.disconnect();
   }
 
+  /// A security failure invalidates the session; reachability cannot repair it.
+  Future<void> rejectSession(DeviceFailureKind failure) async {
+    if (_disposed) return;
+    if (!{
+      DeviceFailureKind.authentication,
+      DeviceFailureKind.authorization,
+      DeviceFailureKind.identity,
+    }.contains(failure)) {
+      throw const DeviceFailure(DeviceFailureKind.invalidInput);
+    }
+    _operation?.cancel();
+    final generation = ++_generation;
+    final active = _active;
+    _active = null;
+    _savedSession = null;
+    _secretSession = null;
+    _publish(
+      ConnectionSnapshot(
+        ConnectionPhase.failed,
+        failure: failure,
+        testOnly: testOnly,
+      ),
+      generation,
+    );
+    await active?.disconnect();
+  }
+
   @override
   void dispose() {
+    if (_disposed) return;
     _disposed = true;
     ++_generation;
     _operation?.cancel();
     final active = _active;
     _active = null;
+    _savedSession = null;
+    _secretSession = null;
     if (active != null) {
       unawaited(active.disconnect().catchError((Object _) {}));
     }

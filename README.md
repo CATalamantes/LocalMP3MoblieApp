@@ -46,8 +46,8 @@ lib/
     development/                    # Isolated local-playback verification entry point
   backend/
     app_dependencies.dart           # Service composition and lifecycle
-    controllers/                    # Navigation, library, playlists, lyrics, statistics, queue
-    models/                         # Approved entities and read-only statistics results
+    controllers/                    # Navigation, music management, local playback and device state
+    models/                         # Approved entities, statistics results and device DTOs
     services/
       database/                     # SQLite lifecycle and typed CRUD
       audio/                        # Injectable local audio, source resolution and dev catalog
@@ -61,7 +61,7 @@ Frontend pages render state and receive user interactions; backend controllers c
 - `models/`: Song, Playlist, PlaylistEntry, and ListeningHistory (implemented in Increment 2).
 - `services/database/`: SQLite initialization, queries, and persistence (implemented in Increment 2).
 - `services/audio/`: Injectable local playback through just_audio, explicit source resolution, and opt-in development registration (Increment 4; real MP3 acceptance pending).
-- `services/device/`: Real HTTP infrastructure, mobile trust-storage adapters, and testable pairing/reconnect orchestration (added to Increment 2 by owner direction). Real BLE/provisioning and hardware integration remain unavailable.
+- `services/device/`: Real HTTP infrastructure, mobile trust storage, pairing/reconnect orchestration, typed Radxa commands, and a proposal codec. Production BLE/provisioning and authenticated hardware operations remain unavailable.
 
 All application code belongs under `lib/frontend/` or `lib/backend/`, except the entry points `main.dart` and `app.dart` directly under `lib/`. Routing lives in `lib/frontend/routes/`, preserving `app_router.dart` and `app_screen.dart`. The development harness has a separate entry point under `frontend/development/` and adds no production route. Device HTTP/BLE services are separate from Flutter Navigator routing.
 
@@ -323,3 +323,63 @@ Remaining increments require separate authorization: 5 reviews device communicat
 Suggested commit message: `feat: implement local MP3 playback and queue integration`.
 
 Stopped after Increment 4. No commit, push, or Increment 5 work was performed.
+
+## Increment 5 — Device communication and integration preparation
+
+Increment 5 adds the UML's `DeviceController` and `RadxaClient` responsibilities to the existing services. It is complete within the hardware-free preparation scope; it does **not** establish actual Radxa connectivity. See [the protocol contract](doc/device-protocol.md) and [the full increment report](doc/Increment5-report.md).
+
+### MVC and public behavior
+
+`DeviceController` extends the shared controller foundation and exposes `loadSavedDevice`, `scanForDevices`, `pairWithCode`, `connect`, `autoReconnect`, `disconnect`, `refreshDeviceInfo`, `readCapabilities`, `forgetDevice`, and `updateConnectionSettings`. Headphone selection is explicitly unsupported; headphone audio is separate from BLE control. No frontend screen is wired to these APIs in this increment.
+
+Immutable `DeviceData` distinguishes no trusted device, discovered/untrusted, pairing, saved trust, connecting, authenticated, disconnected, reconnecting, forgetting, error, and unavailable. Test connections use a separate `testConnected` phase and always retain `hardwareAuthenticated: false`. A saved summary contains only device ID, HTTPS endpoint, reconnect preference, and provenance—not passkeys, credentials, or pinned material. Device telemetry stays null until received; no battery/storage defaults are fabricated.
+
+`RadxaClient` prepares typed remote playback, recording, file-list/removal, and download-job contracts over the existing `ConnectionManager`/`DeviceTransport`. Commands require an authorized session, advertised capability, and transport support. Status/capability reads bootstrap capabilities only within that session. Old concurrent responses cannot widen newer capability results. Production client constructors reject test sessions. Actual transfer methods remain unavailable, and bulk transfer requires authenticated Wi-Fi; no file is read, written, or transferred by these contracts.
+
+`AppDependencies` owns the new controller/client, loads saved metadata without requiring connectivity, contains device initialization failures, and awaits pairing cleanup on shutdown. Offline SQLite/music management remains independent. The original 17 screens, routes, Midnight Crimson theme, four-table schema/models, local audio service, and PlaybackController source are unchanged.
+
+### Trust, cancellation, and reconnection
+
+Production discovery, pairing, identity verification, provisioning, authenticated connection, and protected commands remain unavailable. Test adapters are confined to test support and never imported into production. A reachable HTTP endpoint, expected name/ID, OS bond, or mocked verifier cannot authenticate hardware.
+
+Pairing now inspects an open, unexpired pairing window before secured provisioning and independent identity/authorization verification. Discovery hints/window observations do not establish trust. The UML's physical three-second hold, two-minute window, and six-digit OLED passkey are documented hardware requirements, not simulated device behavior. UUIDs, trust roots, credential schemes, and BLE/security protocols remain unspecified and unimplemented.
+
+Generation/cancellation guards cover service and controller requests, commands, connection events, and disposal. New controller requests supersede pending connection/enrollment work. Forgetting can cancel pairing; it drains in-flight credential/settings writes and clears incomplete enrollment before reporting success. Cleanup failures are surfaced, and incomplete records do not grant trust. Local forgetting still does not claim remote revocation or native bond removal.
+
+Connection retry policy remains **one initial attempt plus up to three retries after 1, 2, and 4 seconds**. Trust/configuration are revalidated before retries, accepting a session, and commands. Identity/authentication/authorization failures are terminal, invalidate cached capabilities, and cannot be cleared by metadata reload or HTTP reachability. No insecure BLE fallback is allowed. Authentication and command limits default to 10 seconds; supported adapters receive cancellation and late responses are rejected independently.
+
+Submitted commands are never replayed automatically. A changing command whose response is lost or malformed may have `DeviceCommandFailure.outcomeUnknown: true`; callers must not assume it failed to execute or blindly resend it. Device errors distinguish authentication, authorization, identity, protocol, unsupported, unavailable, transient, storage, invalid input, and cancellation. Low-level `JsonHttpClient` behavior remains unchanged.
+
+### Proposed protocol and testing boundaries
+
+`DeviceProtocol` implements a **proposal v1** envelope with `protocol_version`, `request_id`, `operation`, and object `payload`. Responses must match version/ID and contain exactly one of `result`/`error`; operation results are typed and validated. Identifiers correlate replies, never prove identity. Candidate routes, device-side deduplication, credential handling, compatibility negotiation, and hardware acceptance requirements are documented in the protocol file as proposals or open decisions.
+
+Real loopback HTTP tests exercise GET/POST, candidate JSON validation, 401/403 and other errors, malformed data, missing fields, interruptions, timeouts/cancellation, and blocked credential transmission. Candidate messages are nested as synthetic validation data; fixtures never execute protected commands or establish hardware authentication. Typed command orchestration uses separate explicit test transports. No Radxa server, Linux simulator, BLE plugin, general remote shell, music download, importing, recording, or sync workflow was added.
+
+### Reproduce verification
+
+Run the full formatting/analysis/test/build/browser sequence above, preparing all three web targets before `node test/browser/verify.cjs`. For the new suites:
+
+```powershell
+flutter test --no-pub test/device_controller_test.dart test/pairing_lifecycle_test.dart test/device_commands_test.dart test/device_connection_safety_test.dart test/device_protocol_http_test.dart
+```
+
+The browser runner preserves prior close/reopen and same-origin SQLite reload checks, HTTP, queue/controllers, mobile-trust isolation, production startup, and the Awaiting MP3 File harness. New assertions require `deviceControllerUnavailable`, `protectedCommandsUnavailable`, and `proposalCodecHttp` to be true before and after reload. These are hardware-free checks; browser storage does not establish mobile secure trust.
+
+Final verification on November 17, 2026:
+
+| Check | Actual result |
+| --- | --- |
+| Dart formatting | Passed; 63 files, no pending changes |
+| `flutter analyze --no-pub` | Passed; no issues |
+| `flutter test --no-pub --reporter expanded` | Passed; 188 tests (all 127 earlier tests plus 61 device tests) |
+| Production, audio-development, and persistence-probe web builds | Passed |
+| Real Chrome browser verification | Passed; same-origin reload persistence, device restrictions, proposal JSON/HTTP, production startup, awaiting-MP3 harness |
+| `node --check test/browser/verify.cjs` and `git diff --check` | Passed |
+| Protected source and original WAV comparison | Unchanged |
+
+The full inventory and results are recorded in `doc/Increment5-report.md`. Native Android/iOS secure storage, pairing, pinned HTTPS/authentication, hardware telemetry/commands, recording, synchronization, and physical revocation remain unverified. Increment 4 remains **Partial — Awaiting MP3 File**, with real playback **Not Tested — Awaiting MP3 File**. No audio fixture was added or modified; all six original WAV hashes remain unchanged. One existing playback test now waits for its expected fake-engine state instead of a fixed number of event-loop turns; its assertions and production playback code are preserved.
+
+Suggested commit message: `feat: prepare secure Radxa device communication integration`.
+
+Stopped after Increment 5. No commit, push, or Increment 6 work was performed. Increment 6 requires owner review and explicit authorization.

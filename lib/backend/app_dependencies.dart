@@ -1,5 +1,4 @@
-import 'package:flutter/foundation.dart';
-
+import 'controllers/device_controller.dart';
 import 'controllers/library_controller.dart';
 import 'controllers/playlist_controller.dart';
 import 'controllers/lyrics_controller.dart';
@@ -16,6 +15,7 @@ import 'services/device/connection_manager.dart';
 import 'services/device/json_http_client.dart';
 import 'services/device/mobile_trust_storage.dart';
 import 'services/device/pairing_service.dart';
+import 'services/device/radxa_client.dart';
 
 /// Composition root. Network absence never prevents opening the local library.
 class AppDependencies {
@@ -41,6 +41,12 @@ class AppDependencies {
   late final lyrics = LyricsController(music);
   late final statistics = StatisticsController(music);
   late final playback = PlaybackController(music, audio: audio);
+  late final radxa = RadxaClient.production(connections);
+  late final device = DeviceController(
+    connections: connections,
+    pairing: pairing,
+    client: radxa,
+  );
 
   static Future<AppDependencies> create({
     MusicDatabase? database,
@@ -62,8 +68,7 @@ class AppDependencies {
       credentials: credentials,
     );
     // The production manager remains unavailable even if a dev HTTP probe works.
-    if (!kIsWeb) await connections.reconnect();
-    return AppDependencies._(
+    final dependencies = AppDependencies._(
       local,
       repository,
       connections,
@@ -78,6 +83,13 @@ class AppDependencies {
       enableLocalPlayback ? audioService ?? LocalAudioService() : null,
       registration,
     );
+    // Device/storage availability never prevents the offline application opening.
+    try {
+      await dependencies.device.loadSavedDevice();
+    } catch (_) {
+      /* State retains the typed failure. */
+    }
+    return dependencies;
   }
 
   Future<void>? _closing;
@@ -87,8 +99,8 @@ class AppDependencies {
     playlists.dispose();
     lyrics.dispose();
     statistics.dispose();
+    await device.close();
     await playback.close();
-    connections.dispose();
     http?.close();
     await database.close();
   }

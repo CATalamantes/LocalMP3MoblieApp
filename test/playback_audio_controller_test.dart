@@ -242,7 +242,11 @@ void main() {
     await c.setQueue(['a']);
     await c.play();
     engine.event(phase: AudioPhase.completed);
-    await settle();
+    await waitFor(
+      () =>
+          engine.commands.where((cmd) => cmd == 'load:a').length == 2 &&
+          c.state.data.isPlaying,
+    );
     expect(c.state.data.queueIndex, 0);
     expect(engine.commands.where((cmd) => cmd == 'load:a'), hasLength(2));
     await c.close();
@@ -259,10 +263,10 @@ void main() {
     await c.setQueue(['a', 'b']);
     await c.play();
     engine.event(phase: AudioPhase.completed);
-    await settle();
+    await waitFor(() => c.state.data.queueIndex == 1 && c.state.data.isPlaying);
     expect(c.state.data.queueIndex, 1);
     engine.event(phase: AudioPhase.completed);
-    await settle();
+    await waitFor(() => !c.state.data.playIntent);
     expect(c.state.data.queueIndex, 1);
     expect(c.state.data.isPlaying, isFalse);
     expect(c.state.data.playIntent, isFalse);

@@ -2,6 +2,8 @@
 import 'dart:convert';
 
 import 'package:cta2000/backend/controllers/controller_state.dart';
+import 'package:cta2000/backend/controllers/device_controller.dart';
+import 'package:cta2000/backend/models/device_models.dart';
 import 'package:cta2000/backend/controllers/library_controller.dart';
 import 'package:cta2000/backend/controllers/lyrics_controller.dart';
 import 'package:cta2000/backend/controllers/playlist_controller.dart';
@@ -15,6 +17,9 @@ import 'package:cta2000/backend/services/device/json_http_client.dart';
 import 'package:cta2000/backend/services/device/connection_manager.dart';
 import 'package:cta2000/backend/services/device/device_contracts.dart';
 import 'package:cta2000/backend/services/device/mobile_trust_storage.dart';
+import 'package:cta2000/backend/services/device/pairing_service.dart';
+import 'package:cta2000/backend/services/device/radxa_client.dart';
+import 'package:cta2000/backend/services/device/device_protocol.dart';
 import 'package:flutter/widgets.dart';
 import 'package:sqflite_common_ffi_web/sqflite_ffi_web.dart';
 import 'package:web/web.dart' as web;
@@ -187,7 +192,55 @@ Future<void> main() async {
         production.snapshot.phase != ConnectionPhase.unavailable) {
       throw StateError('Production hardware authentication became available');
     }
-    production.dispose();
+    final pairing = PairingService.production(
+      settings: settings,
+      credentials: credentials,
+      disconnect: production.disconnect,
+    );
+    final device = DeviceController(
+      connections: production,
+      pairing: pairing,
+      client: RadxaClient.production(production),
+    );
+    try {
+      for (final operation in <Future<void> Function()>[
+        device.loadSavedDevice,
+        device.scanForDevices,
+        device.connect,
+        device.refreshDeviceInfo,
+      ]) {
+        try {
+          await operation();
+          throw StateError('Device operation unexpectedly available');
+        } on DeviceControllerFailure catch (failure) {
+          if (failure.deviceFailure != DeviceFailureKind.unavailable) rethrow;
+        }
+      }
+      if (device.state.data.hardwareAuthenticated ||
+          device.state.data.status != null ||
+          device.state.data.phase != DevicePhase.unavailable) {
+        throw StateError('Device controller exposed hardware data');
+      }
+      final proposed = DeviceProtocol.request(
+        'browser-proposal',
+        DeviceOperation.status,
+        {},
+      );
+      final fixture = await http.request(
+        'POST',
+        'api/echo',
+        body: {'candidate': proposed},
+      ) as Map;
+      if (fixture['testOnly'] != true ||
+          DeviceProtocol.validateCandidate(
+                (fixture['body'] as Map)['candidate'],
+              )['request_id'] !=
+              'browser-proposal') {
+        throw StateError('Browser proposal codec/HTTP mismatch');
+      }
+    } finally {
+      await device.close();
+    }
     _report({
       'status': phase,
       'closeReopen': true,
@@ -198,6 +251,9 @@ Future<void> main() async {
       'http': true,
       'hardwareAuthenticated': hardwareAuthenticated,
       'mobileTrustUnavailable': true,
+      'deviceControllerUnavailable': true,
+      'protectedCommandsUnavailable': true,
+      'proposalCodecHttp': true,
       'origin': Uri.base.origin,
     });
   } catch (error, stack) {

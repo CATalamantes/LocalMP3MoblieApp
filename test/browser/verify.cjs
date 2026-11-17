@@ -87,12 +87,16 @@ async function serve(root, port) {
     await call('Page.navigate',{url});
     const first=await probe();assert.equal(first.status,'seeded');
     assert.equal(first.controllers,true);assert.equal(first.queueWrap,true);
+    assert.equal(first.deviceControllerUnavailable,true);
+    assert.equal(first.protectedCommandsUnavailable,true);assert.equal(first.proposalCodecHttp,true);
     console.log('FIRST LOAD',JSON.stringify(first));
     await call('Page.reload',{ignoreCache:true});
     // Wait for navigation to replace the previous DOM before reading markers.
     await delay(500);
     const reload=await probe();assert.equal(reload.status,'restored');
     assert.equal(reload.controllers,true);assert.equal(reload.queueWrap,true);
+    assert.equal(reload.deviceControllerUnavailable,true);
+    assert.equal(reload.protectedCommandsUnavailable,true);assert.equal(reload.proposalCodecHttp,true);
     assert.equal(reload.origin,first.origin);
     console.log('SAME-ORIGIN RELOAD',JSON.stringify(reload));
     await call('Page.navigate',{url:url+'&cleanup=true'});

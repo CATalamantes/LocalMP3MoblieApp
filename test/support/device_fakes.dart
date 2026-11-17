@@ -1,5 +1,6 @@
 import 'package:cta2000/backend/services/device/device_contracts.dart';
 import 'package:cta2000/backend/services/device/json_http_client.dart';
+import 'package:cta2000/backend/models/device_models.dart';
 
 final testSettings = DeviceSettings(
   deviceId: 'test-only-device',
@@ -56,9 +57,18 @@ class FakeProvisioning implements BondingProvisioningAdapter {
   DeviceFailureKind? failure;
   int calls = 0;
   @override
+  Future<PairingWindow?> inspectPairingWindow(
+    String deviceId,
+    RequestCancellation cancellation,
+  ) async => PairingWindow(
+    open: true,
+    expiresAt: DateTime.now().add(const Duration(minutes: 2)),
+  );
+  @override
   Future<ProvisioningResult> provision({
     required String deviceId,
     required String passkey,
+    RequestCancellation? cancellation,
   }) async {
     calls++;
     if (failure != null) throw DeviceFailure(failure!);
@@ -75,7 +85,10 @@ class FakeVerifier implements IdentityAuthorizationVerifier {
   DeviceFailureKind? failure;
   int calls = 0;
   @override
-  Future<void> verifyProvisioning(ProvisioningResult result) async {
+  Future<void> verifyProvisioning(
+    ProvisioningResult result, {
+    RequestCancellation? cancellation,
+  }) async {
     calls++;
     if (failure != null) throw DeviceFailure(failure!);
   }
