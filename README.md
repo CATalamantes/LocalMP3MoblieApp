@@ -44,16 +44,21 @@ lib/
     theme/                          # Midnight Crimson colors and component themes
     routes/                         # Centralized Flutter Navigator definitions
   backend/
+    app_dependencies.dart           # Service composition and lifecycle
     controllers/                    # MVC behavior and application state
-test/                               # Navigation and layout verification
+    models/                         # Four approved music entities
+    services/
+      database/                     # SQLite lifecycle and typed CRUD
+      device/                       # HTTP, trust storage and connection workflow
+test/                               # Database, HTTP, workflow and UI verification
 ```
 
-Frontend pages render state and receive user interactions; backend controllers coordinate behavior and notify views. Models and infrastructure services will be added under `lib/backend/` only when their increments require implementations:
+Frontend pages render state and receive user interactions; backend controllers coordinate behavior and notify views. Backend models and infrastructure are organized as follows:
 
-- `models/`: Song, Playlist, PlaylistEntry, and ListeningHistory (Increment 2).
-- `services/database/`: SQLite initialization, queries, and persistence (Increment 2).
-- `services/audio/`: Local test-audio playback (Increment 4).
-- `services/device/`: Future Radxa communication boundaries (Increment 5 and later hardware integration).
+- `models/`: Song, Playlist, PlaylistEntry, and ListeningHistory (implemented in Increment 2).
+- `services/database/`: SQLite initialization, queries, and persistence (implemented in Increment 2).
+- `services/audio/`: Local test-audio playback (not created; belongs to Increment 4).
+- `services/device/`: Real HTTP infrastructure, mobile trust-storage adapters, and testable pairing/reconnect orchestration (added to Increment 2 by owner direction). Real BLE/provisioning and hardware integration remain unavailable.
 
 These future directories and the future `assets/` structure are intentionally not created empty. All application code belongs under `lib/frontend/` or `lib/backend/`, except the entry points `main.dart` and `app.dart` directly under `lib/`. Routing lives in `lib/frontend/routes/`, preserving `app_router.dart` and `app_screen.dart`. Device HTTP/BLE services are separate from Flutter Navigator routing.
 
@@ -61,7 +66,7 @@ These future directories and the future `assets/` structure are intentionally no
 
 - The entry point starts MaterialApp; centralized routes and theme configure the application. A ChangeNotifier controller owns main-tab selection. Views display state and request navigation.
 - Midnight Crimson uses navy backgrounds, blue surfaces, crimson accents, and white/gray text, with no green UI accents.
-- Future increments introduce Song, Playlist, PlaylistEntry, ListeningHistory, SQLite services, business controllers, audio, and device interfaces. Song retains optional `lyrics_text`. No empty layer scaffolding or premature infrastructure is created.
+- Increment 2 provides the approved models, SQLite services, and networking foundations. Business controllers, importing, audio playback, and full UI integration remain in their later increments. Song retains optional `lyrics_text`.
 - The newer master prompt permits local development playback in Increment 4, superseding older Radxa-only playback notes. Increment 1 implements no playback.
 - Hardware values are unavailable; controls cannot claim connections, downloads, recording, or transfer success. Wireframe sample music, accounts, synced lyrics, commerce, and social content are not live data.
 - The six supplied `Music/` files are WAV files and remain unchanged. Audio registration and the missing MP3 requirement belong to Increment 4.
@@ -115,3 +120,74 @@ Verification for this final correction (separate from the previous results):
 - `git diff --check`: passed.
 
 Browser launch was not repeated for this move. This remains an Increment 1 correction; no later-increment functionality was added. Stop for owner review and manual commit/push.
+
+## Increment 2 — SQLite and networking foundations
+
+The owner expanded Increment 2 to include real HTTP infrastructure and testable pairing/reconnection orchestration. Importing, local playback, core music-management controllers, and final frontend integration remain in their original later increments. The 17 screens and Midnight Crimson theme are preserved. No audio files are seeded or downloaded by this increment.
+
+### SQLite and repository API
+
+`MusicDatabase` owns version-1 initialization and closing; an injected factory isolates platform setup. `LocalMusicRepository` exposes typed `songs`, `playlists`, `entries`, and `history` stores with `insert`, `find`, `list`, `update`, and `delete`. `getEntries` returns playlist order; `getLyrics` and `updateLyrics` support saving, editing, and clearing optional lyrics. `transaction` provides a transaction-bound repository; nested transactions are rejected.
+
+The only application tables are `SONG`, `PLAYLIST`, `PLAYLIST_ENTRY`, and `LISTENING_HISTORY`, with exactly the approved columns. IDs are caller-supplied strings; dates use UTC epoch milliseconds; booleans use 0/1. Foreign keys are enabled. Deleting a song removes its playlist entries and history; deleting a playlist removes its entries without deleting songs. Repeated songs are allowed as separate entries. Lyrics are nullable text in `SONG.lyrics_text`; audio is stored by reference. Initialization does not seed sample data, and opening a newer schema is rejected rather than erasing it. Future schema upgrades require explicit versioned migrations.
+
+Mobile uses the native sqflite factory and `cta2000.db` in the application database directory. Browser development uses the same repository API with SQLite WASM/IndexedDB and a separate `cta2000-development.db`. Browser data belongs to its origin and can be removed by browser storage clearing; changing the local port creates a different origin. Keep `web/sqlite3.wasm` and `web/sqflite_sw.js` with the project. To regenerate them after dependency changes, run `dart run sqflite_common_ffi_web:setup` and repeat browser verification.
+
+### HTTP, configuration, and trust
+
+`JsonHttpClient` performs real JSON HTTP requests with an injectable `http.Client`, configurable base URI (including host/IP, port, and API prefix), relative endpoint paths, query parameters, headers, and timeout (10 seconds by default). `probe()` requires a configured probe path. Failures distinguish configuration, transport, timeout, cancellation, response status, and malformed JSON. Redirects are rejected; commands are not automatically retried. Requests use `AbortableRequest`; a separate cancellation/timeout race also handles clients that ignore cancellation.
+
+The app composition root (`AppDependencies`) opens local storage independently of networking. Build-time `DEVICE_BASE_URL`, `DEVICE_PROBE_PATH`, and `DEVICE_LOCAL_DEVELOPMENT` configure an optional HTTP client; there is no default device address or assumed hardware API. HTTP reachability never establishes hardware authentication. Invalid HTTP configuration disables that client and displays a warning while local storage still initializes. Database initialization failure preserves the navigation shell with an error banner, without resetting saved data.
+
+HTTPS is required for device targets. Explicit local development can use plain HTTP only at localhost/loopback; authorization and cookie headers are rejected there. Never pass device secrets to test servers. Generic probe/client behavior is implemented now; authenticated Radxa endpoint mappings and identity verification are deliberately unavailable.
+
+`PairingService` orchestrates six-digit-passkey bonding/provisioning and verifies both identity and phone authorization before saving trust. Only test constructors currently accept those adapters. Exactly one device can be remembered, and a different device requires forgetting the existing record first. Cleanup failures are reported, and reconnection requires matching settings and credential records.
+
+`MobileDeviceSettingsStore` uses app preferences for non-secret settings. `MobileCredentialStore` delegates credentials and pinned identity material to native secure storage. Both reject browser and unsupported desktop use. iOS Keychain entitlements and a local-network usage description are configured, but native signing, Keychain behavior, and Android/iOS persistence have not been validated on this Windows host. Android scaffolding is not added in this increment.
+
+`ConnectionManager` prefers authenticated Wi-Fi, with BLE fallback only for supported commands after transient Wi-Fi failures. Identity/authorization failures are terminal; large transfers cannot use BLE. Reconnection means **one initial attempt plus up to three retries**, waiting **1, 2, and 4 seconds**. Cancellation, disposal, and superseding reconnects prevent stale completions from changing state. Local forgetting disconnects and clears records; it does not claim remote trust revocation or OS bond removal.
+
+Production composition has no BLE/provisioning, identity-verification, or authorization adapter. Production pairing and authenticated connections therefore remain unavailable, even when a local HTTP probe succeeds. Test sessions are always labeled `testOnly`, and `hardwareAuthenticated` stays false. Test adapters are located under `test/` and never imported into production. There is no production capability flag to promote mocks into hardware authentication.
+
+### Reproducing verification
+
+```powershell
+flutter pub get
+dart format --output=none --set-exit-if-changed lib test
+flutter analyze --no-pub
+flutter test --no-pub
+flutter build web --no-pub
+flutter build web --no-pub --target test/browser/persistence_probe.dart --output build/browser-verification
+node test/browser/verify.cjs
+git diff --check
+```
+
+The browser runner requires Node 22+ and Chrome. Set `CHROME_PATH` if Chrome is installed elsewhere. It starts isolated servers on ports 52842 and 52843 and an isolated headless Chrome profile. It writes all four entities and lyrics through the shared repository, verifies close/reopen, reloads at the same origin and requires restored data, checks browser HTTP and mobile-trust isolation, then verifies the production Library launches without an initialization error. It cleans its test database, browser, and servers. Host-side SQLite tests are separate and do not substitute for this browser check.
+
+For an interactive test-only HTTP server, run `node test/support/http_server.cjs`. It exposes `GET /health` and `POST /echo` on `127.0.0.1:8765`; these are fixture endpoints, not a promised Radxa protocol. Configure `MOCK_PORT` and `MOCK_ORIGIN` if necessary. For example, `flutter run -d chrome --web-port=52841 --dart-define=DEVICE_BASE_URL=http://127.0.0.1:8765 --dart-define=DEVICE_PROBE_PATH=health --dart-define=DEVICE_LOCAL_DEVELOPMENT=true` composes the development HTTP client. Calling it remains a backend-service operation; wiring device controls into the screens belongs to later integration. Automated request behavior is demonstrated by `flutter test --no-pub test/http_networking_test.dart`.
+
+Mobile secure-storage tests in this increment mock the platform channel or preferences API. They validate adapter behavior and secret separation, not actual OS encryption, persistence, bonding, or hardware authorization. Real BLE, identity provisioning, secure reconnection, and device commands require later native/hardware tests.
+
+### Increment 2 verification results — November 17, 2026
+
+| Check | Actual result |
+| --- | --- |
+| Dependency resolution and SQLite browser asset setup | Passed |
+| Dart format check | Passed; 28 Dart files, no changes needed |
+| `flutter analyze --no-pub` | Passed; no issues |
+| `flutter test --no-pub --reporter expanded` | Passed; 48 tests (SQLite/models, real loopback HTTP, device workflows, mocked mobile storage contracts, and all 17 screens) |
+| `flutter build web --no-pub` | Passed |
+| Browser harness web build | Passed |
+| `node test/browser/verify.cjs` | Passed in real Chrome; all four entities and lyrics restored after close/reopen AND same-origin reload at `http://127.0.0.1:52842` |
+| Browser HTTP and trust separation | Passed; HTTP requests succeeded, mobile trust stores remained unavailable, hardware authentication stayed false |
+| Production app startup in Chrome | Passed; Library rendered without initialization error |
+| JavaScript syntax checks | Passed for the browser runner and development HTTP fixture |
+| Standalone development HTTP fixture | Passed; health, JSON echo, and unknown-endpoint 404 checked on loopback |
+| iOS configuration XML parsing | Passed; syntax only, not an iOS build or signing test |
+| Existing screens/routes/theme/controller source comparison | Unchanged |
+| `git diff --check` | Passed |
+| Native Android/iOS secure storage, signing, OS bonding, BLE, Radxa identity/authentication | Not validated on this Windows host; production pairing and authenticated hardware connection remain unavailable |
+
+Suggested commit message: `feat: add SQLite persistence and device networking foundations`.
+
+Stop after this increment for owner review and manual commit/push. Increment 3 is not started.

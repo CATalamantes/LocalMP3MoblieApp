@@ -22,6 +22,24 @@ Future<void> openDetail(WidgetTester tester, AppScreen screen) async {
 }
 
 void main() {
+  testWidgets('startup failure and networking warnings preserve navigation', (
+    tester,
+  ) async {
+    await tester.pumpWidget(const Mp3ControllerApp(initializationFailed: true));
+    expect(find.textContaining('could not initialize'), findsOneWidget);
+    await selectTab(tester, AppScreen.device);
+    await tester.pumpWidget(
+      const Mp3ControllerApp(
+        serviceWarning: 'Device networking configuration is invalid. Local storage remains available.',
+      ),
+    );
+    expect(
+      find.textContaining('Local storage remains available'),
+      findsOneWidget,
+    );
+    await selectTab(tester, AppScreen.library);
+  });
+
   // Every approved screen is exercised via a visible navigation control.
   // Each detail path is unwound one level at a time to verify its origin.
   final journeys = <AppScreen, List<List<AppScreen>>>{
