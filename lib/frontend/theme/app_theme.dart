@@ -11,6 +11,24 @@ abstract final class AppTheme {
   static const muted = Color(0xFFBAC1CC);
   static const outline = Color(0xFF2B4058);
 
+  // Production frontend component styling; the audio harness keeps its base theme.
+  static ThemeData get frontend => midnightCrimson.copyWith(
+    dividerTheme: const DividerThemeData(
+      color: outline,
+      thickness: 1,
+      space: 12,
+    ),
+    inputDecorationTheme: midnightCrimson.inputDecorationTheme.copyWith(
+      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+    ),
+    iconButtonTheme: IconButtonThemeData(
+      style: IconButton.styleFrom(minimumSize: const Size(48, 48)),
+    ),
+    textButtonTheme: TextButtonThemeData(
+      style: TextButton.styleFrom(foregroundColor: text),
+    ),
+  );
+
   static ThemeData get midnightCrimson => ThemeData(
     useMaterial3: true,
     brightness: Brightness.dark,

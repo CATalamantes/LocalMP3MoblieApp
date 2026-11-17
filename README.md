@@ -43,7 +43,7 @@ lib/
     widgets/                        # Reusable presentation components
     theme/                          # Midnight Crimson colors and component themes
     routes/                         # Centralized Flutter Navigator definitions
-    development/                    # Isolated local-playback verification entry point
+    development/                    # Isolated audio harness and frontend design gallery
   backend/
     app_dependencies.dart           # Service composition and lifecycle
     controllers/                    # Navigation, music management, local playback and device state
@@ -383,3 +383,74 @@ The full inventory and results are recorded in `doc/Increment5-report.md`. Nativ
 Suggested commit message: `feat: prepare secure Radxa device communication integration`.
 
 Stopped after Increment 5. No commit, push, or Increment 6 work was performed. Increment 6 requires owner review and explicit authorization.
+
+## Increment 6 — Flutter frontend
+
+All 17 approved destinations now use designed frontend pages instead of the Increment 1 placeholder content. The 22 reference PNGs were reviewed; the red/navy Library, Playlist Details, Add Music, and Midnight Crimson Now Playing variants determine styling. Other references supply their screen layouts, with the already-approved Midnight Crimson colors and four primary destinations retained. Green accents and legacy Search navigation are not reintroduced.
+
+The owner chose to omit artist chat, Follow, merchandise, and video extras. Artwork/profile photos are not separate project assets, so the implementation uses neutral artwork frames and a music emblem rather than invented accounts or downloaded covers. Exact font metadata was not supplied; the existing bundled sans-serif foundation is retained. The full source-to-screen mapping, visual comparison notes, coverage, inventory, and results are in [Increment6-report.md](doc/Increment6-report.md).
+
+### Presentation and navigation boundaries
+
+Pages and reusable widgets live under `frontend/`. Shared components cover artwork, cards, status pills, search/category/sort controls, song rows, playback controls, meters, settings rows, dialogs, chart presentation, mini-player, and the four-tab navigation. `AppTheme.frontend` adds frontend component styling to the unchanged Midnight Crimson base; the existing audio harness still uses its original base theme.
+
+`ScreenPresentation` is an immutable rendering input using existing Song, Playlist, statistics, recording, device-status, and remote-file DTOs where applicable. Its default is unconnected with no song/device/statistics. `PresentationMode` exposes unconnected, ready, loading, empty, error, and unavailable layouts. It does not fetch data, create domain controllers, or grant hardware capabilities. No page receives `AppDependencies` or calls a database/audio/device service. Live binding remains Increment 7.
+
+Search input, category/sort choices, list/grid layout, sync-scope selection, period filters, form fields, and dialogs affect local presentation only. Sort/search choices do not execute duplicate music-management logic. Clipboard paste fills only the URL field; local URL syntax validation performs no network request. Draft saves validate and explicitly report unavailable persistence; they never apply a saved change. Cancel discards the draft. Root-tab UI state survives tab switches within the shell; app reload resets it. Actual imports, recording, playback, sync, settings changes, file operations, and trust removal remain unavailable.
+
+Unknown values use unavailable labels or neutral meters, not invented telemetry/progress. Manual lyrics preserve multiline text without synchronized highlighting or line-to-audio seeking. The statistics selector follows the four reference periods; no custom-date UI was invented. Recording album/year/genre fields and folder names are presentation inputs only and do not change the approved database schema or imply implemented persistence.
+
+Existing route names and NavigationController are preserved. Detail routes receive their originating shell context; tapping a primary tab returns to that shell and selects the destination without adding duplicate shells. Direct-entry detail routes replace their stack when selecting a primary destination. Back returns to the previous screen. Fullscreen Lyrics and Now Playing omit primary navigation; other pages share the mini-player and four tabs. The mini-player is navigational and never starts audio.
+
+### Isolated visual gallery
+
+Run the gallery independently:
+
+```powershell
+flutter run -d chrome -t lib/frontend/development/frontend_preview.dart --web-port=52845
+```
+
+The banner says **DESIGN PREVIEW · SAMPLE DATA · NO SERVICES**. Its menus select screens and presentation states. A direct gallery example is `http://localhost:52845/?screen=playlist&state=ready`; selectors use AppScreen enum names and PresentationMode names. Sample songs, lyrics, telemetry, charts, folders and recording metadata exist only in this separate entry point/test fixtures. No SQLite, networking, pairing, audio engine, or real audio file is initialized. The production app has no route or flag enabling these fixtures.
+
+### Verification and visual review
+
+Run the established checks plus the gallery build and screenshot runner:
+
+```powershell
+dart format --output=none --set-exit-if-changed lib test
+flutter analyze --no-pub
+flutter test --no-pub --reporter expanded
+flutter build web --no-pub
+flutter build web --no-pub --target lib/frontend/development/local_playback_harness.dart --output build/audio-development
+flutter build web --no-pub --target test/browser/persistence_probe.dart --output build/browser-verification
+flutter build web --no-pub --target lib/frontend/development/frontend_preview.dart --output build/frontend-preview
+node --check test/browser/verify.cjs
+node --check test/browser/visual_verify.cjs
+node test/browser/verify.cjs
+node test/browser/visual_verify.cjs
+git diff --check
+```
+
+The visual runner requires Node 22+ and Chrome (`CHROME_PATH` supported). It captures all 17 production screens and 17 populated previews at 390 × 844, including successive scroll positions. It writes screenshots, a manifest mapping screens to wireframes, and a review index to ignored `build/increment6-visual/`. Capturing images is distinct from visual inspection; see the report for actual inspection findings and accepted differences.
+
+Increment 6 verification completed on November 17, 2026:
+
+| Check | Actual result |
+| --- | --- |
+| Formatting and analysis | Passed; 76 formatted files, zero changes; no analysis issues |
+| Full Flutter test suite | Passed; 217 tests, including all 188 existing tests |
+| Production, frontend-preview, audio-harness, and persistence-probe web builds | Passed |
+| Existing real-Chrome browser verification | Passed; same-origin reload persistence, controller/HTTP/security checks, production startup, idle audio harness |
+| Frontend browser capture and visual review | 34 screen sets, 86 frames; all 17 production and 17 preview top views plus selected lower sections inspected against references |
+| Both browser-script syntax checks and `git diff --check` | Passed |
+| Protected source and six original WAV hashes | Unchanged |
+
+Increment 6 is complete within its presentation-only scope. Visual comparison is qualitative rather than pixel-exact; accepted artwork, unavailable-value, manual-lyrics, and responsive differences are documented in the report. Native builds, platform screen readers, real hardware, and real MP3 acceptance are not claimed.
+
+Responsive tests cover 320/390/430 px at normal and 200% text, populated and unconnected states, scrollable dialogs, and keyboard-open lyric/recording forms. Text scaling stays enabled. Important controls remain reachable; the mini-player is hidden while the keyboard is open. Icon controls have labels/tooltips and 48 px targets; forms expose validation feedback. Automated semantics-label, Android touch-target, and text-contrast guidelines are checked on the Library; this is not a native screen-reader certification.
+
+Increment 4 remains **Partial — Awaiting MP3 File**; actual playback stays **Not Tested — Awaiting MP3 File**. Increment 5 production authentication and hardware commands remain unavailable. Backend code, schema, models, entry points, dependencies, MP3 configuration, and the audio harness are preserved. No audio was generated, downloaded, converted, renamed, or changed.
+
+Suggested commit message: `feat: implement approved Flutter frontend wireframes`.
+
+Stopped after Increment 6. No commit, push, or Increment 7 work was performed.

@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 
 import '../pages/main_shell.dart';
-import '../pages/placeholder_page.dart';
+import '../pages/frontend_page.dart';
+import 'frontend_navigation.dart';
 import 'app_screen.dart';
 
 abstract final class AppRouter {
@@ -30,7 +31,12 @@ abstract final class AppRouter {
         if (AppScreen.mainScreens.contains(screen)) {
           return MainShell(initialScreen: screen);
         }
-        return PlaceholderPage(screen: screen);
+        return FrontendPage(
+          screen: screen,
+          arguments: settings.arguments is FrontendRouteArguments
+              ? settings.arguments as FrontendRouteArguments
+              : null,
+        );
       },
     );
   }
