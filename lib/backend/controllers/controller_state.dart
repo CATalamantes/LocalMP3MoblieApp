@@ -49,6 +49,32 @@ abstract class MusicController<T> extends ChangeNotifier {
 
   bool isEmpty(T data);
   T prepareData(T data) => data;
+  ControllerFailure? failureForData(T data) => null;
+  T prepareErrorData(T data, ControllerFailure failure) => data;
+  ControllerFailure mapFailure(Object error) => error is ControllerFailure
+      ? error
+      : error is MusicRecordNotFound
+      ? ControllerFailure(
+          ControllerFailureKind.notFound,
+          '${error.entity} not found',
+        )
+      : const ControllerFailure(
+          ControllerFailureKind.storage,
+          'The local data operation failed',
+        );
+
+  /// Engine events update data without changing the active command generation
+  /// or clearing a newer loading/error status. Late events after disposal drop.
+  @protected
+  void publishEventData(T data, {ControllerFailure? failure}) {
+    if (_disposed) return;
+    _state = ControllerState(
+      data,
+      failure == null ? state.status : ControllerStatus.error,
+      error: failure ?? state.error,
+    );
+    notifyListeners();
+  }
 
   void ensureActive() {
     if (_disposed) {
@@ -94,28 +120,24 @@ abstract class MusicController<T> extends ChangeNotifier {
       final result = await work;
       if (!_disposed && generation == _generation) {
         final data = prepareData(result.data);
+        final failure = failureForData(data);
         _state = ControllerState(
           data,
-          isEmpty(data) ? ControllerStatus.empty : ControllerStatus.success,
+          failure != null
+              ? ControllerStatus.error
+              : isEmpty(data)
+              ? ControllerStatus.empty
+              : ControllerStatus.success,
+          error: failure,
         );
         notifyListeners();
       }
       return result.value;
     } catch (error, stack) {
-      final failure = error is ControllerFailure
-          ? error
-          : error is MusicRecordNotFound
-          ? ControllerFailure(
-              ControllerFailureKind.notFound,
-              '${error.entity} not found',
-            )
-          : const ControllerFailure(
-              ControllerFailureKind.storage,
-              'The local data operation failed',
-            );
+      final failure = mapFailure(error);
       if (!_disposed && generation == _generation) {
         _state = ControllerState(
-          state.data,
+          prepareErrorData(state.data, failure),
           ControllerStatus.error,
           error: failure,
         );

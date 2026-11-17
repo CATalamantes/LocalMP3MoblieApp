@@ -38,6 +38,7 @@ async function serve(root, port) {
   try {
     servers.push(await serve('build/browser-verification',52842));
     servers.push(await serve('build/web',52843));
+    servers.push(await serve('build/audio-development',52844));
     const chrome = process.env.CHROME_PATH || 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
     browser = spawn(chrome,['--headless=new','--disable-gpu','--no-first-run',
       '--remote-debugging-port=0',`--user-data-dir=${profile}`,'about:blank'],
@@ -107,6 +108,20 @@ async function serve(root, port) {
     assert.ok(appText.includes('Your Library'),'Production app did not render Library');
     assert.ok(!appText.includes('could not initialize'),'Production database initialization failed');
     console.log('PRODUCTION APP','Library rendered without initialization error');
+    await call('Page.navigate',{url:'http://127.0.0.1:52844/'});
+    let developmentText='';
+    for(let i=0;i<600;i++) {
+      await evaluate("document.querySelector('flt-semantics-placeholder')?.click()");
+      developmentText=await evaluate('document.body.innerText');
+      if(developmentText?.includes('Awaiting MP3 File'))break;
+      await delay(100);
+    }
+    assert.ok(developmentText.includes('Awaiting MP3 File'),'Development harness did not show missing fixture state');
+    assert.ok(developmentText.includes('Not Tested — Awaiting MP3 File'));
+    assert.ok(developmentText.includes('Processing: idle'));
+    assert.ok(!developmentText.includes('Playing and ready: true'));
+    console.log('DEVELOPMENT HARNESS','Awaiting MP3 File; idle, no active playback');
+    console.log('REAL MP3 ACCEPTANCE','Not Tested — Awaiting MP3 File');
   } finally {
     socket?.close();
     if(browser && browser.exitCode===null) {

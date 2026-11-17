@@ -37,7 +37,10 @@ void main() {
   tearDown(() => f.close());
 
   test('application composition provides working controllers and disposes their lifecycle', () async {
-    final app = await AppDependencies.create(database: f.database);
+    final app = await AppDependencies.create(
+      database: f.database,
+      enableLocalPlayback: false,
+    );
     await f.song('a');
     final p = await app.playlists.createPlaylist('Composed');
     await app.playlists.addSong(p.playlistId, 'a');
@@ -201,7 +204,7 @@ void main() {
     final directory = await Directory.systemTemp.createTemp(
       'cta2000-preserve-',
     );
-    final file = File('${directory.path}/local-audio.mp3');
+    final file = File('${directory.path}/file-preservation-sentinel.bin');
     try {
       await file.writeAsBytes([
         1,

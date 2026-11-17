@@ -43,13 +43,16 @@ lib/
     widgets/                        # Reusable presentation components
     theme/                          # Midnight Crimson colors and component themes
     routes/                         # Centralized Flutter Navigator definitions
+    development/                    # Isolated local-playback verification entry point
   backend/
     app_dependencies.dart           # Service composition and lifecycle
     controllers/                    # Navigation, library, playlists, lyrics, statistics, queue
     models/                         # Approved entities and read-only statistics results
     services/
       database/                     # SQLite lifecycle and typed CRUD
+      audio/                        # Injectable local audio, source resolution and dev catalog
       device/                       # HTTP, trust storage and connection workflow
+assets/audio/                       # Tracked documentation/catalog; actual audio ignored
 test/                               # Database, HTTP, workflow and UI verification
 ```
 
@@ -57,10 +60,10 @@ Frontend pages render state and receive user interactions; backend controllers c
 
 - `models/`: Song, Playlist, PlaylistEntry, and ListeningHistory (implemented in Increment 2).
 - `services/database/`: SQLite initialization, queries, and persistence (implemented in Increment 2).
-- `services/audio/`: Local test-audio playback (not created; belongs to Increment 4).
+- `services/audio/`: Injectable local playback through just_audio, explicit source resolution, and opt-in development registration (Increment 4; real MP3 acceptance pending).
 - `services/device/`: Real HTTP infrastructure, mobile trust-storage adapters, and testable pairing/reconnect orchestration (added to Increment 2 by owner direction). Real BLE/provisioning and hardware integration remain unavailable.
 
-These future directories and the future `assets/` structure are intentionally not created empty. All application code belongs under `lib/frontend/` or `lib/backend/`, except the entry points `main.dart` and `app.dart` directly under `lib/`. Routing lives in `lib/frontend/routes/`, preserving `app_router.dart` and `app_screen.dart`. Device HTTP/BLE services are separate from Flutter Navigator routing.
+All application code belongs under `lib/frontend/` or `lib/backend/`, except the entry points `main.dart` and `app.dart` directly under `lib/`. Routing lives in `lib/frontend/routes/`, preserving `app_router.dart` and `app_screen.dart`. The development harness has a separate entry point under `frontend/development/` and adds no production route. Device HTTP/BLE services are separate from Flutter Navigator routing.
 
 ### Increment boundaries
 
@@ -158,11 +161,12 @@ flutter analyze --no-pub
 flutter test --no-pub
 flutter build web --no-pub
 flutter build web --no-pub --target test/browser/persistence_probe.dart --output build/browser-verification
+flutter build web --no-pub --target lib/frontend/development/local_playback_harness.dart --output build/audio-development
 node test/browser/verify.cjs
 git diff --check
 ```
 
-The browser runner requires Node 22+ and Chrome. Set `CHROME_PATH` if Chrome is installed elsewhere. It starts isolated servers on ports 52842 and 52843 and an isolated headless Chrome profile. It writes all four entities and lyrics through the shared repository, verifies close/reopen, reloads at the same origin and requires restored data, checks browser HTTP and mobile-trust isolation, then verifies the production Library launches without an initialization error. It cleans its test database, browser, and servers. Host-side SQLite tests are separate and do not substitute for this browser check.
+The browser runner requires Node 22+ and Chrome. Set `CHROME_PATH` if Chrome is installed elsewhere. It starts isolated servers on ports 52842 (persistence), 52843 (production), and 52844 (development audio harness) and an isolated headless Chrome profile. It writes all four entities and lyrics through the shared repository, verifies close/reopen, reloads at the same origin and requires restored data, checks browser HTTP and mobile-trust isolation, then verifies the production Library launches without an initialization error. Increment 4 also checks the empty-catalog harness stays idle and displays Awaiting MP3 File. It cleans its test database, browser, and servers. Host-side SQLite tests are separate and do not substitute for this browser check. This runner does not verify real audio playback.
 
 For an interactive test-only HTTP server, run `node test/support/http_server.cjs`. It exposes `GET /health` and `POST /echo` on `127.0.0.1:8765`; these are fixture endpoints, not a promised Radxa protocol. Configure `MOCK_PORT` and `MOCK_ORIGIN` if necessary. For example, `flutter run -d chrome --web-port=52841 --dart-define=DEVICE_BASE_URL=http://127.0.0.1:8765 --dart-define=DEVICE_PROBE_PATH=health --dart-define=DEVICE_LOCAL_DEVELOPMENT=true` composes the development HTTP client. Calling it remains a backend-service operation; wiring device controls into the screens belongs to later integration. Automated request behavior is demonstrated by `flutter test --no-pub test/http_networking_test.dart`.
 
@@ -238,3 +242,84 @@ Native mobile builds, OS secure storage, and real hardware are not newly validat
 Suggested commit message: `feat: implement music management controllers and business logic`.
 
 Stop after Increment 3 for owner review and manual commit/push. Do not begin Increment 4 without explicit authorization.
+
+## Increment 4 — Local MP3 playback (Partial)
+
+Local audio support and queue integration are implemented and tested with injected doubles. **Real MP3 playback: Not Tested — Awaiting MP3 File.** There is no MP3 fixture in the project; no audio was generated, downloaded, converted, or modified. Earlier increment sections describe their historical behavior; the policies below describe the current playback API.
+
+`LocalAudioService` implements an injectable `AudioService`, resolves a Song's explicit source, and lazily owns one `JustAudioEngine`. The adapter delegates decoding, position, duration, processing states, completion, and errors to [just_audio](https://pub.dev/packages/just_audio) 0.10.6. [audio_session](https://pub.dev/packages/audio_session) 0.2.4 configures a music session on Android/iOS; just_audio retains its interruption handling. Both installed packages require Dart ^3.6.0 and Flutter >=3.27.0, compatible with the verified Flutter 3.47.2 / Dart 3.13.2 toolchain. No background audio, lock-screen integration, remote streaming, or desktop-native audio adapter is added. Web compilation passed; native playback and interruption behavior still require platform tests.
+
+`AppDependencies` injects the local service into the existing `PlaybackController` and awaits its disposal before closing SQLite. Tests can inject the entire service or its engine/resolver, and metadata-only queue clients can explicitly use `enableLocalPlayback: false`. The UI calls controllers, never just_audio. The four database tables, fields, schema version, original 17 screens, routes, theme, and device services are preserved. Production screen binding remains deferred; only the separate development entry point exposes audio controls.
+
+### Playback policy and state
+
+- `setQueue` and `selectSong` replace the queue, stop prior playback, reset play intent, and prepare the selected song paused. `selectAt`, `next`, and `previous` preserve intent: a playing selection continues on the new occurrence; a paused selection remains paused. Duplicate occurrences and manual wraparound remain intact. Empty queues do not play. Missing records/sources fail explicitly without silently removing or skipping entries.
+- `play`/`resume`, `pause`, `stop`, `seek`, and `setVolume` delegate to the engine. Stop resets progress and intent; a later play reloads the selected song. Replacing/clearing a queue stops its old source. Async controller calls return futures which callers must await and handle.
+- Natural completion advances once per source session and wraps by default (`continuousPlayback: true`), including restarting a one-song queue. With continuous playback disabled, natural completion stops at the last occurrence; manual next/previous still wrap. Explicit stop and load failures never advance automatically.
+- Immutable state separates requested play intent, engine `playing`, and processing (`idle`, `loading`, `ready`, `buffering`, `completed`, `error`). `isPlaying` requires a ready engine reporting playing with no error. Buffering may retain engine play intent without claiming audible playback. Ready/paused, position, known/unknown duration, queue index, and typed error are available to future views.
+- Negative seeks and seeks without a known ready duration are rejected. Positions beyond duration clamp to the end; state reflects the engine's accepted position rather than an optimistic timer. Volume must be finite and in [0, 1]. Initialization/load timeouts bound pending operations; they do not simulate progress.
+- Controller generations, serialized commands, source-session tags, stale-event filtering, and disposal guards protect rapid switching, pause during load, late failures, completion, and shutdown. No competing player is created for each track.
+- `AudioFailure` distinguishes `missingSource`, `unsupportedSource`, `engineInitialization`, `playback`, `invalidPosition`, `invalidCatalog`, `cancelled`, and `disposed`. `PlaybackFailure` exposes the underlying audio error through controller state/caller failures. A missing asset differs from a missing platform plugin or session initialization failure.
+
+Playback position and completion remain available as real engine events. No approved rule defines when a play counts, so this increment writes **no listening history**, introduces no threshold, and does not count mocked or development playback.
+
+### Sources and development registration
+
+SQLite stores references only in the existing `Song.filePath`; it never stores audio blobs. Bundled sources use `asset:///assets/audio/owner-test.mp3`. Future native local sources may use absolute `file:///...` URIs, with existence checking. Bare paths, remote URLs, traversal, and arbitrary browser file URIs are rejected; importing/browser file picking is outside this increment.
+
+`assets/audio/` contains tracked documentation and `development_songs.json`, initially `[]`. The asset directory is registered in `pubspec.yaml`; actual audio remains ignored by Git. `DevelopmentAudioRegistrar` is disabled unless `--dart-define=ENABLE_DEVELOPMENT_AUDIO=true` is supplied. It validates stable IDs and paths, checks asset existence, skips/report missing files, and transactionally inserts only absent song IDs. Repeated registration preserves every existing metadata field, lyrics, and unrelated record. An edited catalog intentionally does not overwrite previously registered songs.
+
+### Provide an MP3 and exercise the harness later
+
+1. Place an owner-supplied, legitimately usable MP3 at `assets/audio/owner-test.mp3`. Do not move or convert the supplied WAVs. Actual MP3 files stay ignored.
+2. Replace the empty catalog with the following entry (add a second distinct ID/path to test navigation). Keep each ID stable. `duration_ms: 0` means unknown stored metadata; the playback display uses engine duration.
+
+   ```json
+   [{
+     "song_id": "dev-owner-test",
+     "title": "My test track",
+     "artist_name": "My artist",
+     "asset_path": "assets/audio/owner-test.mp3",
+     "duration_ms": 0
+   }]
+   ```
+
+3. Fully restart/rebuild to refresh the asset bundle; hot reload alone is insufficient for a newly added asset. Run:
+
+   ```powershell
+   flutter run -d chrome -t lib/frontend/development/local_playback_harness.dart --web-port=52841 --dart-define=ENABLE_DEVELOPMENT_AUDIO=true
+   ```
+
+4. Click **Load queue**, then **Play** as a user interaction. Listen, confirm ready/playing and increasing position, pause/resume, enter a nonnegative seek in seconds, stop, and test next/previous and natural completion. Browser autoplay restrictions remain in force; rejected playback is an error, never success. Retest using a fresh click if the browser blocks playback. Check audio audibly yourself; rendered pages and ready flags alone cannot establish audibility.
+5. With no registered fixtures, the harness says **Awaiting MP3 File**, keeps controls disabled, and initializes no audio engine. It is isolated from the 17 production screens and is not a replacement Now Playing screen.
+
+The six untouched files `Music/01 Track 1.wav` through `Music/06 Track 6.wav` are stereo 16-bit PCM WAV at 44.1 kHz. This is a candidate format for the engine/browser's native decoding; actual decoding on this host was not exercised. They are outside the asset bundle and development catalog. Format/container support depends on each browser/OS backend; no WAV or MP3 compatibility across platforms is claimed without playback tests.
+
+### Increment 4 verification — November 17, 2026
+
+| Check | Actual result |
+| --- | --- |
+| Dart formatting check | Passed; 53 Dart files |
+| `flutter analyze --no-pub` | Passed; no issues |
+| `flutter test --no-pub --reporter expanded` | Passed; 127 tests, including all prior 98 tests |
+| Production, development harness, persistence probe web builds | Passed |
+| Existing browser verification in real Chrome | Passed; close/reopen and same-origin reload persistence, controllers, HTTP, mobile-trust isolation, production startup |
+| Empty-catalog development harness in Chrome | Passed; Awaiting MP3 File, idle, no active playback |
+| Protected source comparison, six WAV hashes, `git diff --check` | Passed; protected files/audio unchanged |
+| MP3 load, actual engine ready, real play/pause, advancing position, seeking, completion, audible audio | **Not Tested — Awaiting MP3 File** |
+| Android playback | **Not Tested — Awaiting MP3 File**; Android scaffolding/platform verification also unavailable |
+| iOS playback | **Not Tested — Awaiting MP3 File**; native build/signing unavailable on this Windows host |
+
+New tests distinguish eight audio-service tests with a scripted engine, three real adapter tests with a mocked package player, four catalog/SQLite integration tests, twelve playback-controller/SQLite tests, and two empty-catalog harness widget tests. They require no MP3 or generated audio. Run all checks using the reproduction commands above, or run the new audio suites with:
+
+```powershell
+flutter test --no-pub test/local_audio_service_test.dart test/just_audio_adapter_test.dart test/development_audio_registration_test.dart test/playback_audio_controller_test.dart test/local_playback_harness_test.dart
+```
+
+See [the full Increment 4 report](doc/Increment4-report.md) for the inventory, exact commands, acceptance matrix, and limitations. Local playback remains separate from Radxa commands: production pairing/authentication stays unavailable, and test adapters cannot establish hardware authentication. Music importing, recording, downloads, final frontend binding, and hardware operations are not part of this increment.
+
+Remaining increments require separate authorization: 5 reviews device communication architecture, 6 implements approved screen layouts, 7 binds the application frontend, and 8 covers stabilization/demonstration. Real MP3 acceptance must still be completed when the owner provides a fixture.
+
+Suggested commit message: `feat: implement local MP3 playback and queue integration`.
+
+Stopped after Increment 4. No commit, push, or Increment 5 work was performed.
