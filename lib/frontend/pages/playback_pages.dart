@@ -7,6 +7,8 @@ import '../widgets/design_widgets.dart';
 import '../widgets/draft_editors.dart';
 import '../widgets/presentation.dart';
 import '../widgets/application_binding.dart';
+import '../widgets/song_editors.dart';
+import '../widgets/queue_sheet.dart';
 
 void _showQueue(BuildContext context, ScreenPresentation data) {
   final a = data.integrated ? ApplicationScope.of(context) : null;
@@ -15,6 +17,7 @@ void _showQueue(BuildContext context, ScreenPresentation data) {
     context: context,
     isScrollControlled: true,
     builder: (sheetContext) {
+      if (a != null) return LiveQueueSheet(actions: a);
       Widget content(ScreenPresentation input) => PageNavigationScope(
         origin: origin,
         presentation: input,
@@ -119,7 +122,7 @@ class NowPlayingPage extends StatelessWidget {
         ],
       ),
       const SizedBox(height: 12),
-      const ArtworkFrame(),
+      ArtworkFrame(reference: data.song?.artworkPath),
       const SizedBox(height: 24),
       Row(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -223,6 +226,20 @@ class SongDetailsPage extends StatelessWidget {
   Widget build(BuildContext context) => PageBody(
     screen: AppScreen.songDetails,
     children: [
+      if (data.song != null)
+        Center(
+          child: ArtworkFrame(size: 120, reference: data.song!.artworkPath),
+        ),
+      if (data.integrated && data.song != null)
+        ActionPill(
+          'Edit Song Information',
+          icon: Icons.edit_outlined,
+          onPressed: () => showSongEditor(
+            context,
+            ApplicationScope.of(context)!,
+            data.song!,
+          ),
+        ),
       SurfaceCard(
         emphasis: true,
         child: Column(

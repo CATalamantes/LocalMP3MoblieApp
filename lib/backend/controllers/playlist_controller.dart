@@ -143,26 +143,49 @@ class PlaylistController extends MusicController<PlaylistData> {
   });
 
   Future<PlaylistEntry> addSong(String playlistId, String songId) =>
-      _mutate(playlistId, (tx) async {
-        await _requirePlaylist(tx, playlistId);
+      addSongs(playlistId, [songId]).then((entries) => entries.single);
+
+  Future<List<PlaylistEntry>> addSongs(
+    String playlistId,
+    List<String> songIds,
+  ) {
+    final ids = List<String>.of(songIds);
+    return _mutate(playlistId, (tx) async {
+      await _requirePlaylist(tx, playlistId);
+      if (ids.isEmpty) {
+        throw const ControllerFailure(
+          ControllerFailureKind.invalidInput,
+          'Select at least one song',
+        );
+      }
+      for (final songId in ids) {
         requireIdentifier(songId);
         if (await tx.songs.find(songId) == null) {
           throw MusicRecordNotFound('song', songId);
         }
-        final ordered = await tx.getEntries(playlistId);
+      }
+      final ordered = await tx.getEntries(playlistId);
+      final added = <PlaylistEntry>[];
+      for (final songId in ids) {
         final id = _idFactory();
         requireIdentifier(id);
         final entry = PlaylistEntry(
           entryId: id,
           playlistId: playlistId,
           songId: songId,
-          position: ordered.isEmpty ? 0 : ordered.last.position + 1,
+          position:
+              (ordered.isEmpty ? 0 : ordered.last.position + 1) + added.length,
           addedAt: _clock().toUtc(),
         );
         await tx.entries.insert(entry);
-        await tx.normalizePlaylistEntries(playlistId, _clock().toUtc());
-        return (await tx.entries.find(id))!;
-      });
+        added.add(entry);
+      }
+      await tx.normalizePlaylistEntries(playlistId, _clock().toUtc());
+      return Future.wait(
+        added.map((entry) async => (await tx.entries.find(entry.entryId))!),
+      );
+    });
+  }
 
   Future<void> removeEntry(String entryId) => execute(() async {
     requireIdentifier(entryId);

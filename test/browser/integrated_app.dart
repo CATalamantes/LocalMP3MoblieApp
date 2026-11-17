@@ -6,6 +6,8 @@ import 'package:cta2000/backend/app_dependencies.dart';
 import 'package:cta2000/backend/models/music_models.dart';
 import 'package:cta2000/backend/services/database/local_music_repository.dart';
 import 'package:cta2000/backend/services/database/music_database.dart';
+import 'package:cta2000/backend/services/artwork/artwork_service.dart';
+import 'package:cta2000/backend/services/artwork/platform_artwork_store.dart';
 import 'package:flutter/widgets.dart';
 import 'package:sqflite_common_ffi_web/sqflite_ffi_web.dart';
 import 'package:web/web.dart' as web;
@@ -21,6 +23,7 @@ Future<void> runIntegratedBrowserApp() async {
     final path = 'integrated-browser-$run.db';
     if (Uri.base.queryParameters['cleanup'] == 'true') {
       await databaseFactoryFfiWeb.deleteDatabase(path);
+      web.window.indexedDB.deleteDatabase('integrated-artwork-$run');
       reportIntegration({'status': 'cleaned'});
       return;
     }
@@ -78,6 +81,9 @@ Future<void> runIntegratedBrowserApp() async {
       database: database,
       enableLocalPlayback: false,
       developmentAudioEnabled: false,
+      artworkService: ArtworkService(
+        store: createArtworkStore(namespace: 'integrated-artwork-$run'),
+      ),
     );
     String? playlistId;
     if (visual) {
@@ -115,6 +121,13 @@ Future<void> runIntegratedBrowserApp() async {
           },
       ],
       'lyrics': (await repository.songs.find('ui-alpha'))?.lyricsText,
+      'title': (await repository.songs.find('ui-alpha'))?.title,
+      'artist': (await repository.songs.find('ui-alpha'))?.artistName,
+      'artworkReference': (await repository.songs.find('ui-alpha'))
+          ?.artworkPath,
+      'artworkBytes': (await dependencies.artwork.read(
+        (await repository.songs.find('ui-alpha'))?.artworkPath,
+      ))?.length,
       'hardwareAuthenticated':
           dependencies.device.state.data.hardwareAuthenticated,
     });

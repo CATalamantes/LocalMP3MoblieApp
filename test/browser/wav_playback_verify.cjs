@@ -41,10 +41,10 @@ async function serve(root,port) {
     async function evaluate(expression){return(await call('Runtime.evaluate',{expression,returnByValue:true})).result?.value;}
     async function text(){await evaluate("document.querySelector('flt-semantics-placeholder')?.click()");return await evaluate("document.body.innerText+'\\n'+[...document.querySelectorAll('[aria-label]')].map(e=>e.getAttribute('aria-label')).join('\\n')")||'';}
     async function waitFor(check,label){for(let i=0;i<1200;i++){const value=await text();if(check(value))return value;await delay(50);}throw Error(`Timed out: ${label}; actual: ${await text()}`);}
-    async function click(label){await waitFor(t=>t.includes(label),label);await delay(150);let box;
+    async function click(label,occurrence=0){await waitFor(t=>t.includes(label),label);await delay(150);let box;
       for(let i=0;i<40;i++){
-        box=await evaluate(`(()=>{const label=${JSON.stringify(label)},selector='[role="button"],[role="tab"],[role="radio"],[role="checkbox"],button';const nodes=[...new Set([...document.querySelectorAll('flt-semantics,button')].filter(e=>e.getAttribute('aria-label')?.includes(label)||e.innerText?.trim().includes(label)).map(e=>e.closest(selector)).filter(Boolean))].filter(e=>{const r=e.getBoundingClientRect();return r.width>0&&r.height>0&&e.getAttribute('aria-disabled')!=='true'&&!e.hasAttribute('disabled');});nodes.sort((a,b)=>Number(b.getAttribute('aria-label')===label||b.innerText?.trim()===label)-Number(a.getAttribute('aria-label')===label||a.innerText?.trim()===label)||a.getBoundingClientRect().width*a.getBoundingClientRect().height-b.getBoundingClientRect().width*b.getBoundingClientRect().height);const e=nodes[0];if(!e)return null;e.scrollIntoView({block:'nearest'});const r=e.getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2};})()`);
-        if(box&&box.y>0&&box.y<1000)break;await delay(100);
+        box=await evaluate(`(()=>{const label=${JSON.stringify(label)},selector='[role="button"],[role="tab"],[role="radio"],[role="checkbox"],button';const nodes=[...new Set([...document.querySelectorAll('flt-semantics,button')].filter(e=>e.getAttribute('aria-label')?.includes(label)||e.innerText?.trim().includes(label)).map(e=>e.closest(selector)).filter(Boolean))].filter(e=>{const r=e.getBoundingClientRect();return r.width>0&&r.height>0&&e.getAttribute('aria-disabled')!=='true'&&!e.hasAttribute('disabled');});nodes.sort((a,b)=>Number(b.getAttribute('aria-label')===label||b.innerText?.trim()===label)-Number(a.getAttribute('aria-label')===label||a.innerText?.trim()===label)||a.getBoundingClientRect().width*a.getBoundingClientRect().height-b.getBoundingClientRect().width*b.getBoundingClientRect().height);const e=nodes[${occurrence}];if(!e)return null;e.scrollIntoView({block:'nearest'});const r=e.getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2};})()`);
+        if(box&&box.y>0&&box.y<1000)break;await call('Input.dispatchMouseEvent',{type:'mouseWheel',x:210,y:600,deltaX:0,deltaY:400});await delay(100);
       }
       assert.ok(box,`Missing enabled control ${label}`);await call('Input.dispatchMouseEvent',{type:'mousePressed',...box,button:'left',clickCount:1});await call('Input.dispatchMouseEvent',{type:'mouseReleased',...box,button:'left',clickCount:1});await delay(200);
     }
@@ -52,6 +52,14 @@ async function serve(root,port) {
       assert.ok(await evaluate("(()=>{const e=document.querySelector('input,textarea');if(!e)return false;e.focus();e.select();return true;})()"));await delay(100);
       await call('Input.dispatchKeyEvent',{type:'keyDown',key:'a',code:'KeyA',windowsVirtualKeyCode:65,modifiers:2});await call('Input.dispatchKeyEvent',{type:'keyUp',key:'a',code:'KeyA',windowsVirtualKeyCode:65,modifiers:2});
       await call('Input.insertText',{text:String(seconds)});await click('Seek');
+    }
+    async function openMiniPlayer(){
+      // Tap the bar beside its transport toggle, away from scrolling links/snackbars.
+      const box=await evaluate("(()=>{const button=[...document.querySelectorAll('[role=button]')].find(e=>e.getAttribute('aria-label')==='Pause'||e.innerText?.trim()==='Pause');if(!button)return null;const r=button.getBoundingClientRect();return{x:r.x-100,y:r.y+r.height/2};})()");
+      assert.ok(box,'Visible mini-player transport toggle');
+      await call('Input.dispatchMouseEvent',{type:'mousePressed',...box,button:'left',clickCount:1});
+      await call('Input.dispatchMouseEvent',{type:'mouseReleased',...box,button:'left',clickCount:1});
+      await waitFor(t=>t.includes('YOUR MUSIC'),'mini-player opens Now Playing');
     }
     function state(value){return{song:value.match(/Song:\s*(.*?)\s+Queue index:/s)?.[1],index:Number(value.match(/Queue index: (\d+)/)?.[1]),position:Number(value.match(/Position: (\d+) ms/)?.[1]),duration:Number(value.match(/Duration: (\d+) ms/)?.[1])};}
     await call('Emulation.setDeviceMetricsOverride',{width:430,height:1000,deviceScaleFactor:1,mobile:true});
@@ -62,7 +70,24 @@ async function serve(root,port) {
     assert.ok(library.includes('Select a song to play'),'Available WAVs should not be labeled as awaiting an MP3');
     fs.writeFileSync('build/debug-music-library.png',Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
     for(let i=1;i<=6;i++)assert.ok(library.includes(`Track ${i}`));assert.ok(library.includes('WAV'));await call('Page.reload',{ignoreCache:true});await delay(500);library=await waitFor(t=>t.includes('Track 6'),'persisted six songs visible immediately after reload');console.log('TEST LIBRARY Six real WAV songs visible immediately and restored at the same origin.',testUrl);
-    await click('Track 1');await waitFor(t=>t.includes('Paused · Local audio'),'normal app actual WAV ready');await click('Play');await waitFor(t=>t.includes('Playing locally'),'normal app actual WAV playing');await waitFor(t=>t.includes('0:01'),'normal app actual playback progress');await click('Pause');await waitFor(t=>t.includes('Paused · Local audio'),'normal app actual WAV paused');console.log('MAIN APP Actual WAV selection, Play, advancing progress and Pause passed.');
+    await click('Track 1');await waitFor(t=>t.includes('Playing locally'),'normal app source tap autoplays WAV in library');
+    await openMiniPlayer(); await waitFor(t=>t.includes('0:01'),'normal app actual playback progress');await click('Pause');await waitFor(t=>t.includes('Paused · Local audio'),'normal app actual WAV paused');console.log('MAIN APP Actual WAV selection, advancing progress and Pause passed.');
+    await click('Back'); await click('Track 5'); await waitFor(t=>t.includes('Playing locally'),'Track 5 autoplays in library');
+    await openMiniPlayer();
+    await waitFor(t=>t.includes('0:02'),'Track 5 actual audio progress before queue edits');
+    function mainPosition(value){const match=value.match(/(?:^|\n)(\d+):(\d\d)(?:\n|$)/);return match?Number(match[1])*60+Number(match[2]):0;}
+    const before=mainPosition(await text()); assert.ok(before>=2);
+    await click('Back');
+    // Returning restores the scrolled Track 5 list. Bring source rows 1/2 into view.
+    await call('Input.dispatchMouseEvent',{type:'mouseWheel',x:210,y:400,deltaX:0,deltaY:-5000}); await delay(350);
+    await click('Song actions'); await click('Add to Queue');
+    await click('Song actions',1);
+    await click('Add to Queue');
+    await openMiniPlayer();
+    const after=await waitFor(t=>t.includes('Playing locally')&&t.includes('Track 5'),'Track 5 still playing after queue edits');
+    assert.ok(mainPosition(after)>=before,'Queue edits did not reset actual WAV progress');
+    for(const track of [1,2,6]) { await click('Next'); await waitFor(t=>t.includes(`Track ${track}`)&&t.includes('Playing locally'),`FIFO next Track ${track}`); }
+    await click('Pause'); console.log('MAIN APP REAL WAV QUEUE Track 5 → 1 → 2 → 6; current audio source and position preserved during edits.');
     await call('Page.navigate',{url:'http://127.0.0.1:52901/'});await waitFor(t=>t.includes('Manual audio verification required'),'WAV harness available');await click('Load queue');
     let current=state(await waitFor(t=>t.includes('Processing: ready')&&t.includes('Song: Track 1')&&state(t).duration>0,'first WAV decoded with engine duration'));
     const expected=[238146,241560,278080,211000,324306,240880],results=[];

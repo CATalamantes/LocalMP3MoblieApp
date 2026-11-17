@@ -1,3 +1,5 @@
+import '../widgets/playlist_pickers.dart';
+
 import 'package:flutter/material.dart';
 
 import '../routes/app_screen.dart';
@@ -499,74 +501,14 @@ class _PlaylistPageState extends State<PlaylistPage> {
           ActionPill(
             'Add',
             icon: Icons.add,
-            onPressed: () => showModalBottomSheet<void>(
-              context: context,
-              isScrollControlled: true,
-              builder: (context) => SafeArea(
-                child: SingleChildScrollView(
-                  padding: const EdgeInsets.all(24),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      const Text('Add songs', style: headingStyle),
-                      const SizedBox(height: 12),
-                      Text(
-                        actions == null
-                            ? 'Adding songs is not connected. No playlist will be changed.'
-                            : 'Choose an existing library song. Repeated occurrences are allowed.',
-                        style: mutedStyle,
-                      ),
-                      if ((actions == null
-                              ? widget.data.songs
-                              : widget.data.availableSongs)
-                          .isEmpty)
-                        const Padding(
-                          padding: EdgeInsets.all(16),
-                          child: Text('No songs available'),
-                        ),
-                      for (final song
-                          in actions == null
-                              ? widget.data.songs
-                              : widget.data.availableSongs)
-                        SongRow(
-                          song: song,
-                          trailing:
-                              actions == null || widget.data.playlist == null
-                              ? null
-                              : IconButton(
-                                  tooltip: 'Add ${song.title}',
-                                  icon: const Icon(Icons.add),
-                                  onPressed: () {
-                                    final a = actions!;
-                                    final playlist = widget.data.playlist!;
-                                    Navigator.pop(context);
-                                    confirmAction(
-                                      this.context,
-                                      title: 'Add song?',
-                                      message:
-                                          'Add ${song.title} to ${playlist.name}?',
-                                      action: 'Add',
-                                      onConfirm: () async {
-                                        await a.dependencies.playlists.addSong(
-                                          playlist.playlistId,
-                                          song.songId,
-                                        );
-                                        return 'Song added.';
-                                      },
-                                    );
-                                  },
-                                ),
-                        ),
-                      TextButton(
-                        onPressed: () => Navigator.pop(context),
-                        child: const Text('Cancel'),
-                      ),
-                    ],
+            onPressed: actions == null || widget.data.playlist == null || busy
+                ? null
+                : () => showAddSongs(
+                    context,
+                    actions!,
+                    widget.data.playlist!.playlistId,
+                    widget.data.availableSongs,
                   ),
-                ),
-              ),
-            ),
           ),
           const ActionPill('Mix', icon: Icons.tune),
           ActionPill(

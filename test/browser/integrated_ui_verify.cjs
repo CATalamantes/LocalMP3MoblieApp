@@ -2,6 +2,7 @@
 // launched only by the isolated test entry, using a unique real browser SQLite DB.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const path = require('node:path');
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 module.exports = async function verifyIntegratedUi(call, evaluate) {
@@ -65,8 +66,41 @@ module.exports = async function verifyIntegratedUi(call, evaluate) {
     await fill(0,'Browser UI playlist'); await fill(1,'Browser UI description'); await click('Save');
     await waitFor('Browser UI playlist'); await click('Browser UI playlist'); await click('Edit');
     await waitFor('Edit playlist'); await fill(0,'Browser UI renamed'); await fill(1,''); await click('Save'); await waitFor('Browser UI renamed');
-    await click('Add'); await waitFor('Add songs'); await click('Add Browser integration Alpha'); await click('Add'); await waitFor('Song added.'); await click('Close');
+    await click('Add'); await waitFor('Add songs'); await click('Browser integration Alpha'); await click('Browser integration Beta'); await click('Add Selected'); await waitFor('2 songs added.');
     await click('Library'); await click('Songs'); await waitFor('Browser integration Alpha'); await click('Song actions',0);
+    await click('Add to Playlist'); await click('Browser UI renamed'); await waitFor('Song added.');
+    await click('Song actions',0); await click('Edit Song Information');
+    for (const width of [320,390,430]) {
+      await call('Emulation.setDeviceMetricsOverride',{width,height:1000,deviceScaleFactor:1,mobile:true}); await delay(200);
+      fs.writeFileSync(`build/increment71-editor-${width}.png`,Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
+    }
+    await fill(0,'Browser edited Alpha'); await fill(1,'Browser edited artist');
+    await call('Page.enable');
+    await call('Page.setInterceptFileChooserDialog',{enabled:true});
+    await click('Choose artwork');
+    const imageInput=await call('DOM.getDocument',{depth:-1,pierce:true});
+    const input=await call('DOM.querySelector',{nodeId:imageInput.root.nodeId,selector:'input[type="file"]'});
+    assert.ok(input.nodeId,'Real artwork file input is available');
+    await call('DOM.setFileInputFiles',{nodeId:input.nodeId,files:[path.resolve('web/icons/Icon-192.png')]});
+    await delay(1200);
+    const artworkDraft=await text();
+    assert.ok(!artworkDraft.includes('cannot be decoded')&&!artworkDraft.includes('could not be selected'),'Selected PNG decoded successfully');
+    assert.ok(artworkDraft.includes('Song artwork'),'Selected PNG is rendered in the editor');
+    await click('Save'); await waitFor('Song information saved.');
+    await waitFor('Browser edited Alpha'); await click('Song actions',0);
+    await click('Add to Queue'); await waitFor('Song added to the upcoming queue.');
+    await click('Song actions',0); await click('Add to Queue');
+    await click('Song actions',1); await click('Play Next');
+    await click('Now Playing'); await click('Queue');
+    assert.match(await text(),/1 · Now playing \/ selected[\s\S]*Browser edited Alpha[\s\S]*2 · Upcoming[\s\S]*Browser integration Beta[\s\S]*3 · Upcoming[\s\S]*Browser edited Alpha/);
+    for (const width of [320,390,430]) {
+      await call('Emulation.setDeviceMetricsOverride',{width,height:1000,deviceScaleFactor:1,mobile:true}); await delay(200);
+      fs.writeFileSync(`build/increment71-queue-${width}.png`,Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
+    }
+    await waitFor('Now playing / selected'); await click('Move queue occurrence 2 down');
+    assert.match(await text(),/2 · Upcoming[\s\S]*Browser edited Alpha[\s\S]*3 · Upcoming[\s\S]*Browser integration Beta/);
+    await click('Remove queue occurrence 3'); await click('Select queue occurrence 2'); await click('Close');
+    await click('Back'); await click('Song actions',0);
     await click('Lyrics & Song Details'); await click('Edit lyrics'); await waitFor('Edit manual lyrics'); await fill(0,lyrics); await click('Save'); await waitFor('Second line!');
     await click('Statistics'); await waitFor('0h 0m 14s 346ms');
     for(const label of ['Week','Month','Year','All Time']) { await click(label); await waitFor('0h 0m 14s 346ms'); }
@@ -74,9 +108,13 @@ module.exports = async function verifyIntegratedUi(call, evaluate) {
     await click('Add Music'); await waitFor('Audio URL');
     await call('Page.reload',{ignoreCache:true});await delay(500);
     const restored=await marker(); assert.equal(restored.status,'restored');assert.equal(restored.origin,'http://127.0.0.1:52842');
-    assert.equal(restored.lyrics,lyrics);assert.deepEqual(restored.playlists,[{name:'Browser UI renamed',description:null,entries:1}]);assert.equal(restored.hardwareAuthenticated,false);assert.equal(restored.songCount,2);
-    await waitFor('Browser UI renamed'); await click('Statistics'); await waitFor('0h 0m 14s 346ms');
-    console.log('INTEGRATED UI',JSON.stringify({playlistCreateEditAdd:true,lyricsUnicodeSave:true,sameOriginReload:true,statistics:true,tabs:4,hardwareAuthenticated:false,origin:restored.origin}));
+    assert.equal(restored.lyrics,lyrics);assert.deepEqual(restored.playlists,[{name:'Browser UI renamed',description:null,entries:3}]);assert.equal(restored.hardwareAuthenticated,false);assert.equal(restored.songCount,2);
+    assert.equal(restored.title,'Browser edited Alpha'); assert.equal(restored.artist,'Browser edited artist');
+    assert.match(restored.artworkReference,/^artwork:\/\/\/[a-f0-9]{32}$/); assert.equal(restored.artworkBytes,fs.statSync('web/icons/Icon-192.png').size);
+    await click('Songs'); assert.ok((await text()).includes('Song artwork'),'Durable artwork renders after reload');
+    fs.writeFileSync('build/increment71-artwork-restored.png',Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
+    await click('Playlists'); await waitFor('Browser UI renamed'); await click('Statistics'); await waitFor('0h 0m 14s 346ms');
+    console.log('INTEGRATED UI',JSON.stringify({playlistCreateEditBatchDuplicateAdd:true,metadataEdit:true,actualImagePicker:true,artworkIndexedDbReload:true,queuePriorityReorderRemoveSelect:true,lyricsUnicodeSave:true,sameOriginReload:true,statistics:true,tabs:4,hardwareAuthenticated:false,origin:restored.origin}));
   } catch(error) {
     fs.writeFileSync('build/increment7-ui-failure.html',await evaluate('document.documentElement.outerHTML'));
     fs.writeFileSync('build/increment7-ui-failure.png',Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));

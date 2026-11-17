@@ -49,12 +49,15 @@ class SongRemovalOutcome {
     this.deletionError,
     this.cleanupError,
     this.refreshError,
+    this.warnings = const [],
   });
   final Object? deletionError, cleanupError, refreshError;
+  final List<String> warnings;
   bool get deleted => deletionError == null;
   String get message => !deleted
       ? 'Song was not removed: ${actionError(deletionError!)}'
       : 'Song removed from the library. Physical audio file preserved.'
+            '${warnings.isEmpty ? '' : ' ${warnings.join(' ')}'}'
             '${cleanupError == null ? '' : ' Playback queue cleanup failed: ${actionError(cleanupError!)}'}'
             '${refreshError == null ? '' : ' A view refresh failed; refresh to reload saved data.'}';
 }
@@ -88,6 +91,12 @@ class FrontendActions {
   Future<void> refreshLibrary() async {
     await dependencies.library.refreshLibrary();
     if (active) await dependencies.playlists.loadPlaylists();
+    if (active) {
+      dependencies.playback.refreshMetadata(
+        dependencies.library.state.data.songs,
+      );
+    }
+    if (active) await loadStatistics();
   }
 
   Future<void> loadStatistics({
@@ -107,14 +116,22 @@ class FrontendActions {
     if (!active) return;
     await dependencies.library.refreshLibrary();
     if (active) await dependencies.playlists.loadPlaylists();
+    if (active) {
+      dependencies.playback.refreshMetadata(
+        dependencies.library.state.data.songs,
+      );
+    }
+    if (active) await loadStatistics();
   }
 
   Future<SongRemovalOutcome> removeSong(String id) async {
     final affectsQueue = dependencies.playback.state.data.queue.any(
       (song) => song.songId == id,
     );
+    var warnings = <String>[];
     try {
-      await dependencies.library.removeSong(id);
+      warnings = (await dependencies.library.deleteSongInformation(id))
+          .warnings;
     } catch (error) {
       return SongRemovalOutcome(deletionError: error);
     }
@@ -150,6 +167,7 @@ class FrontendActions {
     return SongRemovalOutcome(
       cleanupError: cleanupError,
       refreshError: refreshError,
+      warnings: warnings,
     );
   }
 
@@ -157,13 +175,10 @@ class FrontendActions {
     BuildContext context,
     List<Song> queue,
     int index, {
-    bool play = false,
+    bool play = true,
     bool existingQueue = false,
   }) async {
     final request = ++selectionGeneration;
-    // Open immediately: errors and pending state remain visible even when a
-    // missing source prevents accepting the requested queue selection.
-    openScreen(context, AppScreen.nowPlaying);
     await quietly(() async {
       if (existingQueue) {
         await dependencies.playback.selectAt(index);

@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import 'dart:typed_data';
+
 import '../../backend/models/music_models.dart';
 import '../routes/app_screen.dart';
 import '../routes/frontend_navigation.dart';
@@ -7,6 +9,8 @@ import '../theme/app_theme.dart';
 import 'presentation.dart';
 import 'application_binding.dart';
 import 'draft_editors.dart';
+import 'song_editors.dart';
+import 'playlist_pickers.dart';
 import '../../backend/controllers/playback_controller.dart';
 import '../../backend/services/audio/audio_service.dart';
 
@@ -122,11 +126,22 @@ class IconTile extends StatelessWidget {
 }
 
 class ArtworkFrame extends StatelessWidget {
-  const ArtworkFrame({super.key, this.size, this.collage = false});
+  const ArtworkFrame({
+    super.key,
+    this.size,
+    this.collage = false,
+    this.reference,
+    this.bytes,
+  });
   final double? size;
   final bool collage;
+  final String? reference;
+  final Uint8List? bytes;
   @override
   Widget build(BuildContext context) {
+    if (reference != null || bytes != null) {
+      return _ManagedArtwork(reference: reference, bytes: bytes, size: size);
+    }
     final art = Container(
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(18),
@@ -161,10 +176,10 @@ class ArtworkFrame extends StatelessWidget {
                   ),
               ],
             )
-          : const Center(
+          : Center(
               child: Icon(
                 Icons.album_outlined,
-                size: 60,
+                size: size == null ? 60 : size! * .6,
                 color: AppTheme.muted,
               ),
             ),
@@ -179,6 +194,63 @@ class ArtworkFrame extends StatelessWidget {
       ),
     );
   }
+}
+
+class _ManagedArtwork extends StatefulWidget {
+  const _ManagedArtwork({this.reference, this.bytes, this.size});
+  final String? reference;
+  final Uint8List? bytes;
+  final double? size;
+  @override
+  State<_ManagedArtwork> createState() => _ManagedArtworkState();
+}
+
+class _ManagedArtworkState extends State<_ManagedArtwork> {
+  Future<Uint8List?>? _image;
+  String? _reference;
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _load();
+  }
+
+  @override
+  void didUpdateWidget(_ManagedArtwork oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _load();
+  }
+
+  void _load() {
+    if (_reference == widget.reference && _image != null) return;
+    _reference = widget.reference;
+    _image =
+        ApplicationScope.of(context)?.dependencies.artwork
+            .read(widget.reference) ??
+        Future.value(null);
+  }
+
+  @override
+  Widget build(BuildContext context) => FutureBuilder<Uint8List?>(
+    future: _image,
+    builder: (_, snapshot) {
+      final bytes = widget.bytes ?? snapshot.data;
+      if (bytes == null) return ArtworkFrame(size: widget.size);
+      final art = ClipRRect(
+        borderRadius: BorderRadius.circular(18),
+        child: Image.memory(
+          bytes,
+          fit: BoxFit.cover,
+          width: widget.size,
+          height: widget.size,
+          semanticLabel: 'Song artwork',
+          errorBuilder: (_, _, _) => ArtworkFrame(size: widget.size),
+        ),
+      );
+      return widget.size == null
+          ? AspectRatio(aspectRatio: 1, child: art)
+          : art;
+    },
+  );
 }
 
 class PresentationNotice extends StatelessWidget {
@@ -425,7 +497,7 @@ class SongRow extends StatelessWidget {
           Text('$rank', style: titleStyle),
           const SizedBox(width: 12),
         ],
-        const ArtworkFrame(size: 48),
+        ArtworkFrame(size: 48, reference: song.artworkPath),
         const SizedBox(width: 12),
         Expanded(
           child: InkWell(
@@ -506,6 +578,55 @@ class SongRow extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Text(song.title, style: headingStyle),
+              for (final next in [true, false])
+                TextButton(
+                  onPressed: () async {
+                    Navigator.pop(sheetContext);
+                    try {
+                      if (next) {
+                        await actions.dependencies.playback.playNext(
+                          song.songId,
+                        );
+                      } else {
+                        await actions.dependencies.playback.addToQueue(
+                          song.songId,
+                        );
+                      }
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(
+                              next
+                                  ? 'Song will play next.'
+                                  : 'Song added to the upcoming queue.',
+                            ),
+                          ),
+                        );
+                      }
+                    } catch (error) {
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text(actionError(error))),
+                        );
+                      }
+                    }
+                  },
+                  child: Text(next ? 'Play Next' : 'Add to Queue'),
+                ),
+              TextButton(
+                onPressed: () {
+                  Navigator.pop(sheetContext);
+                  showPlaylistChooser(context, actions, song);
+                },
+                child: const Text('Add to Playlist'),
+              ),
+              TextButton(
+                onPressed: () {
+                  Navigator.pop(sheetContext);
+                  showSongEditor(context, actions, song);
+                },
+                child: const Text('Edit Song Information'),
+              ),
               TextButton(
                 onPressed: () {
                   Navigator.pop(sheetContext);
@@ -760,7 +881,10 @@ class MiniPlayer extends StatelessWidget {
             padding: const EdgeInsets.all(10),
             child: Row(
               children: [
-                const IconTile(Icons.album_outlined, size: 36),
+                if (song?.artworkPath == null)
+                  const IconTile(Icons.album_outlined, size: 36)
+                else
+                  ArtworkFrame(size: 36, reference: song!.artworkPath),
                 const SizedBox(width: 10),
                 Expanded(
                   child: Column(

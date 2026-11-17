@@ -7,6 +7,17 @@ import 'controller_state.dart';
 
 enum PlaybackCapability { unavailable, local }
 
+class QueueOccurrence {
+  const QueueOccurrence(this.id, {this.manual = false});
+  final String id;
+  final bool manual;
+}
+
+class QueueEditFailure extends ControllerFailure {
+  const QueueEditFailure(String message)
+    : super(ControllerFailureKind.invalidInput, message);
+}
+
 class PlaybackFailure extends ControllerFailure {
   PlaybackFailure(this.audioFailure)
     : super(switch (audioFailure.audioKind) {
@@ -27,8 +38,13 @@ class PlaybackData {
     this.audio = const AudioSnapshot(),
     this.playIntent = false,
     this.capability = PlaybackCapability.unavailable,
-  }) : queue = List.unmodifiable(queue);
+    Iterable<QueueOccurrence> occurrences = const [],
+    this.revision = 0,
+  }) : queue = List.unmodifiable(queue),
+       occurrences = List.unmodifiable(occurrences);
   final List<Song> queue;
+  final List<QueueOccurrence> occurrences;
+  final int revision;
   final int? queueIndex;
   Song? get selectedSong => queueIndex == null ? null : queue[queueIndex!];
   final AudioSnapshot audio;
@@ -65,6 +81,8 @@ class PlaybackController extends MusicController<PlaybackData> {
   int? _completedEpoch;
   List<String> _desiredIds = [];
   int? _desiredIndex;
+  List<QueueOccurrence> _occurrences = [];
+  int _revision = 0;
   PlaybackData _prepared = PlaybackData();
   Future<void>? _shutdown;
 
@@ -89,6 +107,8 @@ class PlaybackController extends MusicController<PlaybackData> {
     return PlaybackData(
       queue: data.queue,
       queueIndex: data.queueIndex,
+      occurrences: data.occurrences,
+      revision: data.revision,
       playIntent: _intent,
       capability: PlaybackCapability.local,
       audio:
@@ -159,6 +179,8 @@ class PlaybackController extends MusicController<PlaybackData> {
         queue: await Future.wait(ids.map(_song)),
         queueIndex: index,
         capability: PlaybackCapability.local,
+        occurrences: List.of(_occurrences),
+        revision: _revision,
       );
 
   Future<Song?> _selectAudio(
@@ -207,6 +229,21 @@ class PlaybackController extends MusicController<PlaybackData> {
   }
 
   Future<void> setQueue(List<String> songIds, {int initialIndex = 0}) {
+    if (initialIndex < 0 ||
+        (songIds.isEmpty
+            ? initialIndex != 0
+            : initialIndex >= songIds.length)) {
+      return execute<void>(
+        () async => throw const QueueEditFailure('Invalid queue position'),
+      );
+    }
+    if (initialIndex >= 0 &&
+        (songIds.isEmpty ? initialIndex == 0 : initialIndex < songIds.length)) {
+      _occurrences = [
+        for (final _ in songIds) QueueOccurrence(newMusicIdentifier()),
+      ];
+      ++_revision;
+    }
     if (_audio != null) {
       if (initialIndex < 0 ||
           (songIds.isEmpty
@@ -226,6 +263,12 @@ class PlaybackController extends MusicController<PlaybackData> {
       ).then<void>((_) {});
     }
     final ids = List<String>.of(songIds);
+    _desiredIds = ids;
+    _desiredIndex = ids.isEmpty ? null : initialIndex;
+    ++_sourceEpoch;
+    final epoch = _sourceEpoch;
+    final revision = _revision;
+    final occurrences = List.of(_occurrences);
     return execute(() async {
       if (initialIndex < 0 ||
           (ids.isEmpty ? initialIndex != 0 : initialIndex >= ids.length)) {
@@ -235,21 +278,28 @@ class PlaybackController extends MusicController<PlaybackData> {
         );
       }
       final songs = await Future.wait(ids.map(_song));
-      return ControllerResult(
-        PlaybackData(
-          queue: songs,
-          queueIndex: songs.isEmpty ? null : initialIndex,
-        ),
-        null,
+      final data = PlaybackData(
+        queue: songs,
+        queueIndex: songs.isEmpty ? null : initialIndex,
+        occurrences: occurrences,
+        revision: revision,
       );
+      if (!_audioDisposed && epoch == _sourceEpoch) _prepared = data;
+      return ControllerResult(data, null);
     });
   }
 
   Future<void> selectSong(String songId) => setQueue([songId]);
   Future<void> clearQueue() {
     ensureActive();
+    _occurrences = [];
+    ++_revision;
+    _desiredIds = [];
+    _desiredIndex = null;
     if (_audio == null) {
-      changeData(PlaybackData());
+      ++_sourceEpoch;
+      _prepared = PlaybackData();
+      changeData(_prepared);
       return Future.value();
     }
     _intent = false;
@@ -275,6 +325,7 @@ class PlaybackController extends MusicController<PlaybackData> {
       ).then((song) => song!);
     }
     final before = state.data;
+    final epoch = ++_sourceEpoch;
     return execute(() async {
       if (index < 0 || index >= before.queue.length) {
         throw const ControllerFailure(
@@ -283,11 +334,16 @@ class PlaybackController extends MusicController<PlaybackData> {
         );
       }
       final selected = await _song(before.queue[index].songId);
+      if (!_audioDisposed && epoch == _sourceEpoch) _desiredIndex = index;
       final songs = before.queue.toList()..[index] = selected;
-      return ControllerResult(
-        PlaybackData(queue: songs, queueIndex: index),
-        selected,
+      final data = PlaybackData(
+        queue: songs,
+        queueIndex: index,
+        occurrences: before.occurrences,
+        revision: before.revision,
       );
+      if (!_audioDisposed && epoch == _sourceEpoch) _prepared = data;
+      return ControllerResult(data, selected);
     });
   }
 
@@ -391,6 +447,124 @@ class PlaybackController extends MusicController<PlaybackData> {
       'No audio service was injected',
     );
   });
+
+  /// Manual additions form a FIFO block before ordinary source tracks.
+  Future<void> playNext(String songId) => _insert(songId, next: true);
+  Future<void> addToQueue(String songId) => _insert(songId, next: false);
+  Future<void> _insert(String songId, {required bool next}) {
+    ensureActive();
+    if (_desiredIds.isEmpty) return setQueue([songId]);
+    final epoch = _sourceEpoch;
+    return execute(() async {
+      Song song;
+      try {
+        song = await _song(songId);
+      } catch (_) {
+        throw const QueueEditFailure('Song is no longer available');
+      }
+      ensureActive();
+      if (epoch != _sourceEpoch) {
+        throw const QueueEditFailure('Queue selection was superseded');
+      }
+      var index = _desiredIndex! + 1;
+      if (!next) {
+        while (index < _occurrences.length && _occurrences[index].manual) {
+          ++index;
+        }
+      }
+      final data = _prepared;
+      if (data.queue.length != _desiredIds.length ||
+          data.queueIndex != _desiredIndex) {
+        throw const QueueEditFailure(
+          'Select an available source queue before editing',
+        );
+      }
+      final songs = data.queue.toList()..insert(index, song);
+      _desiredIds.insert(index, songId);
+      _occurrences.insert(
+        index,
+        QueueOccurrence(newMusicIdentifier(), manual: true),
+      );
+      _commitQueue(songs);
+      return ControllerResult(_queueData(), null);
+    }, mutation: true);
+  }
+
+  Future<void> removeUpcoming(String occurrenceId) =>
+      _editUpcoming(occurrenceId, null, null);
+  Future<void> reorderUpcoming(
+    String occurrenceId,
+    int finalIndex, {
+    required int revision,
+  }) => _editUpcoming(occurrenceId, finalIndex, revision);
+
+  Future<void> _editUpcoming(String id, int? target, int? revision) {
+    ensureActive();
+    final epoch = _sourceEpoch;
+    return execute(() async {
+      if (epoch != _sourceEpoch ||
+          (revision != null && revision != _revision)) {
+        throw const QueueEditFailure('Queue changed; try again');
+      }
+      final index = _occurrences.indexWhere((entry) => entry.id == id);
+      if (_desiredIndex == null ||
+          index <= _desiredIndex! ||
+          (target != null &&
+              (target <= _desiredIndex! || target >= _occurrences.length))) {
+        throw const QueueEditFailure('Only upcoming occurrences can be edited');
+      }
+      if (_prepared.queue.length != _desiredIds.length ||
+          _prepared.queueIndex != _desiredIndex) {
+        throw const QueueEditFailure(
+          'Select an available source queue before editing',
+        );
+      }
+      final songs = _prepared.queue.toList();
+      final song = songs.removeAt(index);
+      final songId = _desiredIds.removeAt(index);
+      final occurrence = _occurrences.removeAt(index);
+      if (target != null) {
+        songs.insert(target, song);
+        _desiredIds.insert(target, songId);
+        _occurrences.insert(target, occurrence);
+      }
+      _commitQueue(songs);
+      return ControllerResult(_queueData(), null);
+    }, mutation: true);
+  }
+
+  void _commitQueue(List<Song> songs) {
+    ++_revision;
+    _prepared = PlaybackData(
+      queue: songs,
+      queueIndex: _desiredIndex,
+      occurrences: List.of(_occurrences),
+      revision: _revision,
+      capability: _audio == null
+          ? PlaybackCapability.unavailable
+          : PlaybackCapability.local,
+    );
+  }
+
+  PlaybackData _queueData() =>
+      _audio == null ? _prepared : _withAudio(_prepared);
+
+  /// Refresh labels without loading, stopping, or replacing an audio source.
+  void refreshMetadata(List<Song> songs) {
+    ensureActive();
+    final latest = {for (final song in songs) song.songId: song};
+    final data = _prepared;
+    _prepared = PlaybackData(
+      queue: data.queue.map((s) => latest[s.songId] ?? s),
+      queueIndex: data.queueIndex,
+      occurrences: data.occurrences,
+      revision: data.revision,
+      capability: data.capability,
+      audio: data.audio,
+      playIntent: data.playIntent,
+    );
+    publishEventData(_audio == null ? _prepared : _withAudio(_prepared));
+  }
 
   @override
   void dispose() {

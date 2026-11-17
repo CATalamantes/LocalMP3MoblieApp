@@ -3,6 +3,7 @@ import 'package:cta2000/app.dart';
 import 'package:cta2000/backend/app_dependencies.dart';
 import 'package:cta2000/backend/services/audio/audio_source_resolver.dart';
 import 'package:cta2000/backend/services/audio/local_audio_service.dart';
+import 'package:cta2000/backend/services/artwork/artwork_service.dart';
 import 'package:cta2000/frontend/widgets/application_binding.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -31,6 +32,7 @@ class IntegratedFixture {
     bool songs = true,
     String? path,
     bool missingAudio = false,
+    ArtworkService? artwork,
   }) async {
     if (path == null) {
       await store.open();
@@ -56,6 +58,7 @@ class IntegratedFixture {
       database: store.database,
       music: store.repository,
       device: device.controller,
+      artwork: artwork,
       audio: LocalAudioService(
         resolver: AudioSourceResolver(assetExists: (_) async => !missingAudio),
         engineFactory: () => engine,

@@ -47,7 +47,7 @@ async function serve(root, port) {
   return server;
 }
 (async () => {
-  const output = path.resolve('build/increment7-visual'); fs.mkdirSync(output,{recursive:true});
+  const output = path.resolve('build/increment71-visual'); fs.mkdirSync(output,{recursive:true});
   const profile = fs.mkdtempSync(path.join(os.tmpdir(),'cta2000-visual-'));
   const servers = []; let browser, socket;
   const manifest = {viewport:{width:390,height:844,textScale:1},screens:[]};
@@ -114,7 +114,7 @@ async function serve(root, port) {
     assert.equal(JSON.parse(await evaluate("document.documentElement.getAttribute('data-integration')")).status,'cleaned');
     assert.equal(manifest.screens.length,51);
     fs.writeFileSync(path.join(output,'manifest.json'),JSON.stringify(manifest,null,2));
-    fs.writeFileSync(path.join(output,'index.html'),'<!doctype html><meta charset="utf-8"><title>Increment 7 visual review</title>'+
+    fs.writeFileSync(path.join(output,'index.html'),'<!doctype html><meta charset="utf-8"><title>Increment 7.1 visual review</title>'+
       '<style>body{background:#101722;color:#f5f6fa;font:14px sans-serif}section{display:flex;gap:10px;flex-wrap:wrap}img{width:195px}article{margin-bottom:30px}h2{font-size:18px}</style>'+
       manifest.screens.map(entry=>`<article><h2>${entry.variant} — ${entry.screen}</h2><p>${entry.wireframe}</p><section>`+
         entry.files.map(name=>`<a href="${name}"><img src="${name}" alt="${name}"></a>`).join('')+'</section></article>').join(''));

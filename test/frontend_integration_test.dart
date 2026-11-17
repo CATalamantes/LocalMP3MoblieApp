@@ -203,9 +203,9 @@ void main() {
       await launch(tester);
       await clickText(tester, 'Add and delete');
       await clickText(tester, 'Add');
-      await clickTooltip(tester, 'Add Alpha song');
-      await clickText(tester, 'Add');
-      await clickText(tester, 'Close');
+      await tester.tap(find.byKey(const ValueKey('pick-song-alpha')));
+      await drainUi(tester);
+      await clickText(tester, 'Add Selected');
       expect(
         f.dependencies.playlists.state.data.entries.single.songId,
         'alpha',
@@ -304,9 +304,9 @@ void main() {
         f.dependencies.playback.state.data.queue.map((song) => song.songId),
         ['alpha', 'beta'],
       );
-      expect(f.dependencies.playback.state.data.isPlaying, isFalse);
-      await tester.ensureVisible(find.byKey(const ValueKey('playback-toggle')));
-      await tester.tap(find.byKey(const ValueKey('playback-toggle')));
+      expect(f.dependencies.playback.state.data.isPlaying, isTrue);
+      expect(find.byKey(const ValueKey('screen-nowPlaying')), findsNothing);
+      await tester.tap(find.byKey(const ValueKey('mini-player-preview')));
       await drainUi(tester);
       expect(f.dependencies.playback.state.data.isPlaying, isTrue);
       expect(find.text('Playing locally'), findsOneWidget);
@@ -563,6 +563,8 @@ void main() {
       await clickText(tester, 'Songs');
       await clickText(tester, 'Alpha song');
       expect(find.textContaining('Audio source missing.'), findsWidgets);
+      await tester.tap(find.byKey(const ValueKey('mini-player-preview')));
+      await drainUi(tester);
       expect(find.text('—:—'), findsNWidgets(2));
       expect(f.dependencies.playback.state.data.isPlaying, isFalse);
       expect(f.engine.commands, isEmpty);

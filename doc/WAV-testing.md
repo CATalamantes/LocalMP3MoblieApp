@@ -21,7 +21,8 @@ If asset staging is needed, use `.\run_test_music.cmd`.
 
 The launcher checks `Music/01 Track 1.wav` through `Music/06 Track 6.wav`, stages
 byte-identical copies in `assets/audio/`, and opens the real app in Chrome with
-development registration enabled. Open Library > Songs, select a track, then Play.
+development registration enabled. Open Library > Songs and tap a track to autoplay
+without leaving the list. Tap the mini-player to open Now Playing.
 Port 52848 stays fixed for SQLite persistence at the same origin.
 
 PowerShell scripts are restricted on this computer, so the CMD wrapper permits

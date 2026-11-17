@@ -1,5 +1,6 @@
 import '../models/music_models.dart';
 import '../services/database/local_music_repository.dart';
+import '../services/artwork/artwork_service.dart';
 import 'controller_state.dart';
 
 enum SongSort { title, artist, dateAdded }
@@ -49,18 +50,62 @@ class SongMetadataUpdate {
     this.audioFormat,
     this.artworkPath,
     this.clearArtwork = false,
+    this.replacementArtwork,
   });
   final String? title, artistName, audioFormat, artworkPath;
   final int? durationMs;
   final bool clearArtwork;
+  final ArtworkDraft? replacementArtwork;
+}
+
+class SongSaveResult {
+  SongSaveResult(this.song, Iterable<String> warnings)
+    : warnings = List.unmodifiable(warnings);
+  final Song song;
+  final List<String> warnings;
+}
+
+class SongDeleteResult {
+  SongDeleteResult(Iterable<String> warnings)
+    : warnings = List.unmodifiable(warnings);
+  final List<String> warnings;
 }
 
 class LibraryController extends MusicController<LibraryData> {
-  LibraryController(this.repository, {DateTime Function()? clock})
-    : _clock = clock ?? DateTime.now,
-      super(LibraryData());
+  LibraryController(
+    this.repository, {
+    DateTime Function()? clock,
+    ArtworkService? artwork,
+  }) : _clock = clock ?? DateTime.now,
+       artwork = artwork ?? ArtworkService(),
+       super(LibraryData());
   final LocalMusicRepository repository;
   final DateTime Function() _clock;
+  final ArtworkService artwork;
+  final Set<String> _pendingCleanup = {};
+  Future<ArtworkDraft?> pickArtwork() {
+    ensureActive();
+    return artwork.pick();
+  }
+
+  Future<void> _cleanup(String? reference, List<String> warnings) async {
+    if (ArtworkService.managedId(reference) != null) {
+      _pendingCleanup.add(reference!);
+    }
+    for (final ref in _pendingCleanup.toList()) {
+      try {
+        if (!(await repository.getSongs()).any((s) => s.artworkPath == ref)) {
+          await artwork.delete(ref);
+        }
+        _pendingCleanup.remove(ref);
+      } catch (_) {
+        warnings.add(
+          'Saved data is committed; unused artwork cleanup will be retried on the next edit.',
+        );
+      }
+    }
+  }
+
   @override
   bool isEmpty(LibraryData data) => data.visibleSongs.isEmpty;
   @override
@@ -129,16 +174,37 @@ class LibraryController extends MusicController<LibraryData> {
   });
 
   Future<Song> updateMetadata(String songId, SongMetadataUpdate update) =>
-      execute(() async {
-        requireIdentifier(songId);
-        if ((update.durationMs != null && update.durationMs! < 0) ||
-            (update.clearArtwork && update.artworkPath != null)) {
-          throw const ControllerFailure(
-            ControllerFailureKind.invalidInput,
-            'Invalid metadata update',
-          );
+      saveSongInformation(songId, update).then((result) => result.song);
+
+  Future<SongSaveResult> saveSongInformation(
+    String songId,
+    SongMetadataUpdate update,
+  ) => execute(() async {
+    return artwork.exclusive(() async {
+      ensureActive();
+      requireIdentifier(songId);
+      if ((update.durationMs != null && update.durationMs! < 0) ||
+          ([
+                update.clearArtwork,
+                update.artworkPath != null,
+                update.replacementArtwork != null,
+              ].where((v) => v).length >
+              1)) {
+        throw const ControllerFailure(
+          ControllerFailureKind.invalidInput,
+          'Invalid metadata update',
+        );
+      }
+      if (update.title != null) requireName(update.title!);
+      String? newReference, oldReference;
+      Song changed;
+      final warnings = <String>[];
+      try {
+        if (update.replacementArtwork != null) {
+          newReference = await artwork.save(update.replacementArtwork!);
         }
-        final changed = await repository.transaction((tx) async {
+        ensureActive();
+        changed = await repository.transaction((tx) async {
           final old = await tx.songs.find(songId);
           if (old == null) {
             throw const ControllerFailure(
@@ -146,6 +212,7 @@ class LibraryController extends MusicController<LibraryData> {
               'Song not found',
             );
           }
+          oldReference = old.artworkPath;
           final song = Song(
             songId: old.songId,
             title: update.title == null
@@ -161,17 +228,53 @@ class LibraryController extends MusicController<LibraryData> {
             lyricsText: old.lyricsText,
             artworkPath: update.clearArtwork
                 ? null
-                : update.artworkPath ?? old.artworkPath,
+                : newReference ?? update.artworkPath ?? old.artworkPath,
           );
           await tx.songs.update(song);
           return song;
         });
-        return ControllerResult(await _read(selected: changed), changed);
-      }, mutation: true);
-
-  Future<void> removeSong(String songId) => execute(() async {
-    requireIdentifier(songId);
-    await repository.deleteSongAndNormalize(songId, _clock().toUtc());
-    return ControllerResult(await _read(), null);
+      } catch (_) {
+        await _cleanup(newReference, warnings);
+        rethrow;
+      }
+      await _cleanup(oldReference, warnings);
+      LibraryData data;
+      try {
+        data = await _read(selected: changed);
+      } catch (_) {
+        warnings.add(
+          'Song saved. Refresh the library to reload committed data.',
+        );
+        data = LibraryData(
+          songs: state.data.songs.map((s) => s.songId == songId ? changed : s),
+          selectedSong: changed,
+        );
+      }
+      return ControllerResult(data, SongSaveResult(changed, warnings));
+    });
   }, mutation: true);
+
+  Future<void> removeSong(String songId) =>
+      deleteSongInformation(songId).then<void>((_) {});
+  Future<SongDeleteResult> deleteSongInformation(String songId) =>
+      execute(() async {
+        return artwork.exclusive(() async {
+          ensureActive();
+          requireIdentifier(songId);
+          final old = await repository.songs.find(songId);
+          await repository.deleteSongAndNormalize(songId, _clock().toUtc());
+          final warnings = <String>[];
+          await _cleanup(old?.artworkPath, warnings);
+          LibraryData data;
+          try {
+            data = await _read();
+          } catch (_) {
+            warnings.add('Song removed. Refresh to reload saved data.');
+            data = LibraryData(
+              songs: state.data.songs.where((s) => s.songId != songId),
+            );
+          }
+          return ControllerResult(data, SongDeleteResult(warnings));
+        });
+      }, mutation: true);
 }

@@ -8,9 +8,21 @@ Run the normal debug app with the six existing WAV test songs:
 flutter run -d chrome --web-port=52848
 ```
 
-Debug startup automatically registers the existing bundled test audio. With no playlists, the Library initially shows **Songs**, including **Track 1–6**; select a track, then press **Play**. VS Code also has a **CTA2000 Chrome** launch configuration. Fully stop/restart after updating startup code; hot reload does not rerun registration. Port 52848 stays fixed for persistence.
+Debug startup automatically registers the existing bundled test audio. With no playlists, the Library initially shows **Songs**, including **Track 1–6**. Tapping a song autoplays it and keeps the current list open; tap the mini-player to open Now Playing. VS Code also has a **CTA2000 Chrome** launch configuration. Fully stop/restart after updating startup code; hot reload does not rerun registration. Port 52848 stays fixed for persistence.
 
 If the WAVs have not been staged on this computer, use `.\run_test_music.cmd` to copy the unchanged local `Music/` files into ignored Flutter assets and launch. Release/profile builds keep registration off by default; an explicit `ENABLE_DEVELOPMENT_AUDIO` define overrides the startup default. No audio is pushed to Git. See [WAV testing](doc/WAV-testing.md).
+
+## Increment 7.1: metadata, playlists and queue
+
+Song Details and each song's three-dot menu offer **Edit Song Information**. Edit title, optional artist, or PNG/JPEG artwork; Save persists the changes, while Cancel discards the draft. Format and duration stay read-only. Images are limited to 5 MiB and 4096 pixels per dimension. Native targets use application-support files; web uses IndexedDB at the same origin. SQLite stores a stable `artwork:///…` reference, never image bytes or a temporary blob URL. Clearing browser site data removes local music metadata and artwork.
+
+Playlist **Add** opens a multi-select picker with **Add Selected**. A song's three-dot menu also offers **Add to Playlist**. Each confirmed addition creates distinct occurrences, including repeated songs. A batch commits in one SQLite transaction, and adding to a playlist leaves playback unchanged.
+
+**Play Next** inserts immediately after the current occurrence. **Add to Queue** appends to the manual upcoming block ahead of normal source tracks: while Track 5 plays, adding Track 1 and Track 2 produces **5 → 1 → 2 → 6**. The temporary queue supports duplicates, upcoming removal, drag reorder and move buttons. Edits preserve the selected occurrence, audio source, position and play intent. Empty additions prepare a song without autoplay; Next/Previous and queue selection preserve playing/paused intent. Explicit source-list taps autoplay in place. Queue edits never write playlists or history, and the queue resets when the app restarts.
+
+All 17 routes, Midnight Crimson styling, domain entities, four-table schema and hardware security restrictions remain in place. Artwork file lifecycle tests run on the host; native picker UI and native app builds are unverified. Real WAV playback is verified in Chrome; **real MP3 playback remains Not Tested — Awaiting MP3 File** and Increment 4 retains Partial acceptance.
+
+See [the full Increment 7.1 report](doc/Increment7.1-report.md) for actual checks, file inventory, limitations and manual review steps. No commit or push was performed.
 
 ## Increment 1: verified screen inventory
 
@@ -61,6 +73,7 @@ lib/
     services/
       database/                     # SQLite lifecycle and typed CRUD
       audio/                        # Injectable local audio, source resolution and dev catalog
+      artwork/                      # Image selection, validation, native files and browser IndexedDB
       device/                       # HTTP, trust storage and connection workflow
 assets/audio/                       # Tracked documentation/catalog; actual audio ignored
 test/                               # Database, HTTP, workflow and UI verification
@@ -72,6 +85,7 @@ Frontend pages render state and receive user interactions; backend controllers c
 - `services/database/`: SQLite initialization, queries, and persistence (implemented in Increment 2).
 - `services/audio/`: Injectable local playback through just_audio, explicit source resolution, and opt-in development registration (Increment 4; real MP3 acceptance pending).
 - `services/device/`: Real HTTP infrastructure, mobile trust storage, pairing/reconnect orchestration, typed Radxa commands, and a proposal codec. Production BLE/provisioning and authenticated hardware operations remain unavailable.
+- `services/artwork/`: Injectable PNG/JPEG selection and durable application-managed image storage. SQLite stores stable references only; audio files remain untouched.
 
 All application code belongs under `lib/frontend/` or `lib/backend/`, except the entry points `main.dart` and `app.dart` directly under `lib/`. Routing lives in `lib/frontend/routes/`, preserving `app_router.dart` and `app_screen.dart`. The development harness has a separate entry point under `frontend/development/` and adds no production route. Device HTTP/BLE services are separate from Flutter Navigator routing.
 

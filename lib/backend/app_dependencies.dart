@@ -19,6 +19,7 @@ import 'services/device/json_http_client.dart';
 import 'services/device/mobile_trust_storage.dart';
 import 'services/device/pairing_service.dart';
 import 'services/device/radxa_client.dart';
+import 'services/artwork/artwork_service.dart';
 
 /// Composition root. Network absence never prevents opening the local library.
 class AppDependencies {
@@ -31,7 +32,8 @@ class AppDependencies {
     this.audio,
     this.developmentAudio, [
     this._providedDevice,
-  ]);
+    ArtworkService? artworkService,
+  ]) : artwork = artworkService ?? ArtworkService();
 
   final MusicDatabase database;
   final LocalMusicRepository music;
@@ -40,7 +42,8 @@ class AppDependencies {
   final JsonHttpClient? http;
   final AudioService? audio;
   final DevelopmentAudioRegistration developmentAudio;
-  late final library = LibraryController(music);
+  final ArtworkService artwork;
+  late final library = LibraryController(music, artwork: artwork);
   late final playlists = PlaylistController(music);
   late final lyrics = LyricsController(music);
   late final statistics = StatisticsController(music);
@@ -64,6 +67,7 @@ class AppDependencies {
     required LocalMusicRepository music,
     required DeviceController device,
     AudioService? audio,
+    ArtworkService? artwork,
   }) {
     return AppDependencies._(
       database,
@@ -74,6 +78,7 @@ class AppDependencies {
       audio,
       DevelopmentAudioRegistration(),
       device,
+      artwork,
     );
   }
 
@@ -81,6 +86,7 @@ class AppDependencies {
     MusicDatabase? database,
     HttpConfiguration? httpConfiguration,
     AudioService? audioService,
+    ArtworkService? artworkService,
     bool enableLocalPlayback = true,
     bool developmentAudioEnabled = const bool.fromEnvironment(
       'ENABLE_DEVELOPMENT_AUDIO',
@@ -111,6 +117,8 @@ class AppDependencies {
           : JsonHttpClient(configuration: httpConfiguration),
       enableLocalPlayback ? audioService ?? LocalAudioService() : null,
       registration,
+      null,
+      artworkService,
     );
     // Device/storage availability never prevents the offline application opening.
     try {
@@ -130,6 +138,7 @@ class AppDependencies {
     statistics.dispose();
     await device.close();
     await playback.close();
+    await artwork.pendingOperations;
     http?.close();
     await database.close();
   }
