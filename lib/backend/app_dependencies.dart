@@ -1,5 +1,11 @@
 import 'package:flutter/foundation.dart';
 
+import 'controllers/library_controller.dart';
+import 'controllers/playlist_controller.dart';
+import 'controllers/lyrics_controller.dart';
+import 'controllers/statistics_controller.dart';
+import 'controllers/playback_controller.dart';
+
 import 'services/database/local_music_repository.dart';
 import 'services/database/music_database.dart';
 import 'services/database/platform_database.dart';
@@ -23,6 +29,11 @@ class AppDependencies {
   final ConnectionManager connections;
   final PairingService pairing;
   final JsonHttpClient? http;
+  late final library = LibraryController(music);
+  late final playlists = PlaylistController(music);
+  late final lyrics = LyricsController(music);
+  late final statistics = StatisticsController(music);
+  late final playback = PlaybackController(music);
 
   static Future<AppDependencies> create({
     MusicDatabase? database,
@@ -54,6 +65,11 @@ class AppDependencies {
   }
 
   Future<void> close() async {
+    library.dispose();
+    playlists.dispose();
+    lyrics.dispose();
+    statistics.dispose();
+    playback.dispose();
     connections.dispose();
     http?.close();
     await database.close();

@@ -45,8 +45,8 @@ lib/
     routes/                         # Centralized Flutter Navigator definitions
   backend/
     app_dependencies.dart           # Service composition and lifecycle
-    controllers/                    # MVC behavior and application state
-    models/                         # Four approved music entities
+    controllers/                    # Navigation, library, playlists, lyrics, statistics, queue
+    models/                         # Approved entities and read-only statistics results
     services/
       database/                     # SQLite lifecycle and typed CRUD
       device/                       # HTTP, trust storage and connection workflow
@@ -66,7 +66,7 @@ These future directories and the future `assets/` structure are intentionally no
 
 - The entry point starts MaterialApp; centralized routes and theme configure the application. A ChangeNotifier controller owns main-tab selection. Views display state and request navigation.
 - Midnight Crimson uses navy backgrounds, blue surfaces, crimson accents, and white/gray text, with no green UI accents.
-- Increment 2 provides the approved models, SQLite services, and networking foundations. Business controllers, importing, audio playback, and full UI integration remain in their later increments. Song retains optional `lyrics_text`.
+- Increment 2 provides the approved models, SQLite services, and networking foundations; Increment 3 adds independently testable business controllers. Importing, audio playback, and full UI integration remain in later increments. Song retains optional `lyrics_text`.
 - The newer master prompt permits local development playback in Increment 4, superseding older Radxa-only playback notes. Increment 1 implements no playback.
 - Hardware values are unavailable; controls cannot claim connections, downloads, recording, or transfer success. Wireframe sample music, accounts, synced lyrics, commerce, and social content are not live data.
 - The six supplied `Music/` files are WAV files and remain unchanged. Audio registration and the missing MP3 requirement belong to Increment 4.
@@ -191,3 +191,50 @@ Mobile secure-storage tests in this increment mock the platform channel or prefe
 Suggested commit message: `feat: add SQLite persistence and device networking foundations`.
 
 Stop after this increment for owner review and manual commit/push. Increment 3 is not started.
+
+## Increment 3 — Controllers and business logic
+
+The shared `MusicController<T>` base extends `ChangeNotifier`. Each controller exposes an immutable `state` containing `data`, `status` (`idle`, `loading`, `success`, `empty`, or `error`), and an optional typed `ControllerFailure`. Async methods also throw failures to their callers: validation, not-found, storage, unavailable, or disposed. Callers must await/catch those futures. Collections exposed by controller data are unmodifiable.
+
+`AppDependencies` owns the five controllers and disposes them before closing the database. Controllers reuse the same `LocalMusicRepository`; all SQL remains in database services. The existing frontend remains unchanged; controller-to-screen binding belongs to Increment 7.
+
+### Controller operations
+
+- `LibraryController`: `loadCachedSongs`, local-only `refreshLibrary`, `loadSong`, cached `search`, `sortBy`, `updateMetadata`, and `removeSong`. Search matches title/artist case-insensitively. Title/artist sorts are ascending, date-added is newest-first, and ties use song ID. `SongMetadataUpdate` distinguishes omitted artwork from `clearArtwork`; identity, file reference, date added, and lyrics are preserved. Titles/names are trimmed and cannot be blank. Blank artist text remains allowed by the existing schema. No song importing or audio-file deletion is performed.
+- `PlaylistController`: `createPlaylist`, `loadPlaylists`, `showPlaylist`, `renamePlaylist`, `updateDescription`, `deletePlaylist`, `addSong`, `removeEntry`, and `reorder`. `showPlaylist` exposes ordered entries and corresponding songs through its state. Duplicate occurrences retain distinct entry IDs. New songs append; reorder uses a zero-based final index. Description null clears it. Mutations preserve playlist creation dates and update modification timestamps.
+- `LyricsController`: `loadManualLyrics`, `saveManualLyrics`, and `clearManualLyrics`. A valid song with null lyrics differs from a missing song. Empty strings, leading/trailing whitespace, multiline text, punctuation, and Unicode are preserved exactly; clear writes null.
+- `StatisticsController`: `load` provides global counted plays, exact `Duration`, top tracks, recent history, and optional song-level statistics. `rangeFor` resolves all-time, explicit dates, and current calendar week/month/year. Weeks start Monday. Local calendar boundaries are calculated before conversion to UTC; ranges are inclusive-start/exclusive-end and use session `startedAt`. Sessions are not prorated across boundaries. Only `countedPlay` contributes to play counts; all included `listenedMs` contributes to duration, including uncounted sessions. Top tracks omit zero-play songs and sort by count descending then song ID ascending. Recent history defaults to 20, uses a positive supplied limit, and sorts by start descending then history ID ascending. Existing songs with no history return zeros. No history or play thresholds are generated.
+- `PlaybackController`: `setQueue`, `selectSong`, `selectAt`, `clearQueue`, `next`, and `previous` manage selection only. Duplicate occurrences are preserved, next/previous wrap, a single-track queue stays selected, and an empty queue has no selection. Navigation revalidates the chosen song and reports not-found without skipping missing tracks. `play`, `pause`, and `setVolume` report unavailable; `isPlaying` always remains false. No engine, audio package, seeking, decoding, position tracking, or listening-history generation is added.
+
+### Transactions and asynchronous safety
+
+Song deletion, its cascades, normalization of every affected playlist to contiguous positions, and affected timestamps execute inside **one SQLite transaction**. A failure anywhere rolls back all changes. Physical audio files are never accessed. Playlist addition, occurrence removal, and reordering also use transactions and normalize positions. The schema and its version remain unchanged.
+
+Each controller serializes its submitted writes. Reads submitted after those writes wait for their completion. Every stateful request gets a generation token; late success or error cannot overwrite a newer state, and disposed controllers cannot notify listeners. Queued writes cannot start after disposal. Already-running transactions may finish atomically, but their late results cannot publish state. Cached search/sort and queue clearing supersede pending loads; refresh again when new data is needed after a cached-only action. Independently cached controllers observe another controller's changes through explicit refresh, without an event bus.
+
+Clocks and identifier factories are injectable for tests. Production playlist/entry IDs use 128 bits from Dart secure randomness; no dependencies were added. Invalid IDs, names, positions, durations, ranges, and references are rejected. Repository failures are surfaced rather than silently swallowed.
+
+### Increment 3 verification — November 17, 2026
+
+| Check | Actual result |
+| --- | --- |
+| `flutter analyze` | Passed; no issues |
+| `flutter test --reporter expanded` | Passed; all 98 tests |
+| Dart formatting check | Passed; 39 files, no changes needed |
+| `git diff --check` | Passed |
+| Controller SQL audit | Passed; queries remain in repository services |
+| Controller/database integration | Passed; isolated SQLite, file preservation, exact lyrics reopen persistence, stats and queue behavior |
+| Forced transaction failures | Passed; song deletion/cascades/all affected playlists roll back together; reorder rollback also verified |
+| Controller lifecycle tests | Passed; deferred success/failure after disposal or newer requests tested for every controller, plus queued-write disposal |
+| `flutter build web` | Passed |
+| Browser harness build and `node test/browser/verify.cjs` | Passed in real Chrome; controller results restored after close/reopen and same-origin page reload, queue wrap verified |
+| Browser HTTP/trust checks and production startup | Passed; mobile trust unavailable, hardware authentication false, Library launches |
+| Protected frontend, schema, original models, and networking comparison | Unchanged |
+
+Reproduce controller tests with `flutter test test/music_controllers_test.dart test/statistics_controller_test.dart test/controller_lifecycle_test.dart`. Run the full verification sequence above, including rebuilding the browser probe and running `node test/browser/verify.cjs`. Tests use isolated databases and test-only metadata, never production music data. Full file inventory and verification details are in `doc/Increment3-report.md`.
+
+Native mobile builds, OS secure storage, and real hardware are not newly validated by this increment. Importing and audio playback remain deferred to Increment 4 and later; frontend integration remains deferred. No new screens, route changes, theme changes, networking behavior changes, schema changes, or hardware operations were introduced.
+
+Suggested commit message: `feat: implement music management controllers and business logic`.
+
+Stop after Increment 3 for owner review and manual commit/push. Do not begin Increment 4 without explicit authorization.

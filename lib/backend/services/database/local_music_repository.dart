@@ -1,6 +1,12 @@
 import 'package:sqflite_common/sqlite_api.dart';
 
 import '../../models/music_models.dart';
+import '../../models/listening_statistics.dart';
+
+class MusicRecordNotFound implements Exception {
+  const MusicRecordNotFound(this.entity, this.id);
+  final String entity, id;
+}
 
 /// Typed CRUD with bound parameters; no SQL escapes the data-service layer.
 class EntityStore<T> {
@@ -82,6 +88,159 @@ class LocalMusicRepository {
     where: 'song_id = ?',
     whereArgs: [songId],
   );
+
+  /// Deletion, cascades and every affected playlist update share one commit.
+  /// Physical audio files are never accessed by this service.
+  Future<void> deleteSongAndNormalize(String songId, DateTime updatedAt) =>
+      transaction((tx) async {
+        if (await tx.songs.find(songId) == null) {
+          throw MusicRecordNotFound('song', songId);
+        }
+        final affected = await tx._db.query(
+          'PLAYLIST_ENTRY',
+          columns: ['playlist_id'],
+          where: 'song_id = ?',
+          whereArgs: [songId],
+          distinct: true,
+          orderBy: 'playlist_id',
+        );
+        await tx.songs.delete(songId);
+        for (final row in affected) {
+          await tx.normalizePlaylistEntries(
+            row['playlist_id'] as String,
+            updatedAt,
+          );
+        }
+      });
+
+  Future<void> normalizePlaylistEntries(
+    String playlistId,
+    DateTime updatedAt,
+  ) async {
+    await writeEntryOrder(
+      playlistId,
+      (await getEntries(playlistId)).map((e) => e.entryId).toList(),
+      updatedAt,
+    );
+  }
+
+  /// Called inside the existing repository transaction; rejects partial orders.
+  Future<void> writeEntryOrder(
+    String playlistId,
+    List<String> ids,
+    DateTime updatedAt,
+  ) async {
+    if (_db is! Transaction) {
+      throw StateError('Entry ordering requires a transaction');
+    }
+    final playlist = await playlists.find(playlistId);
+    if (playlist == null) throw MusicRecordNotFound('playlist', playlistId);
+    final current = await getEntries(playlistId);
+    final byId = {for (final e in current) e.entryId: e};
+    if (ids.length != current.length ||
+        ids.toSet().length != ids.length ||
+        !ids.every(byId.containsKey)) {
+      throw ArgumentError(
+        'Entry order must contain every occurrence exactly once',
+      );
+    }
+    for (var index = 0; index < ids.length; index++) {
+      final old = byId[ids[index]]!;
+      await entries.update(
+        PlaylistEntry(
+          entryId: old.entryId,
+          playlistId: old.playlistId,
+          songId: old.songId,
+          position: index,
+          addedAt: old.addedAt,
+        ),
+      );
+    }
+    await playlists.update(
+      Playlist(
+        playlistId: playlist.playlistId,
+        name: playlist.name,
+        description: playlist.description,
+        createdAt: playlist.createdAt,
+        updatedAt: updatedAt,
+      ),
+    );
+  }
+
+  Future<ListeningStatistics> readStatistics({
+    ListeningRange range = const ListeningRange(),
+    int recentLimit = 20,
+    String? songId,
+  }) => transaction((tx) async {
+    final clauses = <String>[];
+    final arguments = <Object?>[];
+    if (range.start != null) {
+      clauses.add('started_at >= ?');
+      arguments.add(range.start!.millisecondsSinceEpoch);
+    }
+    if (range.end != null) {
+      clauses.add('started_at < ?');
+      arguments.add(range.end!.millisecondsSinceEpoch);
+    }
+    final where = clauses.isEmpty ? '' : 'WHERE ${clauses.join(' AND ')}';
+    const totals =
+        'COALESCE(SUM(counted_play), 0) AS plays, COALESCE(SUM(listened_ms), 0) AS duration';
+    final summary = (await tx._db.rawQuery(
+      'SELECT $totals FROM LISTENING_HISTORY $where',
+      arguments,
+    )).single;
+    final rankings = await tx._db.rawQuery(
+      '''SELECT song_id, $totals
+      FROM LISTENING_HISTORY $where GROUP BY song_id
+      HAVING SUM(counted_play) > 0 ORDER BY plays DESC, song_id ASC''',
+      arguments,
+    );
+    final top = <SongStatistics>[];
+    for (final row in rankings) {
+      final id = row['song_id'] as String;
+      final song = await tx.songs.find(id);
+      if (song == null) throw MusicRecordNotFound('song', id);
+      top.add(
+        SongStatistics(
+          song: song,
+          countedPlays: row['plays'] as int,
+          listeningDuration: Duration(milliseconds: row['duration'] as int),
+        ),
+      );
+    }
+    final recent = (await tx._db.query(
+      'LISTENING_HISTORY',
+      where: clauses.isEmpty ? null : clauses.join(' AND '),
+      whereArgs: arguments,
+      orderBy: 'started_at DESC, history_id ASC',
+      limit: recentLimit,
+    )).map(ListeningHistory.fromMap).toList();
+    SongStatistics? selected;
+    if (songId != null) {
+      final song = await tx.songs.find(songId);
+      if (song == null) throw MusicRecordNotFound('song', songId);
+      final filter = [...clauses, 'song_id = ?'].join(' AND ');
+      final values = (await tx._db.rawQuery(
+        'SELECT $totals FROM LISTENING_HISTORY WHERE $filter',
+        [...arguments, songId],
+      )).single;
+      selected = SongStatistics(
+        song: song,
+        countedPlays: values['plays'] as int,
+        listeningDuration: Duration(milliseconds: values['duration'] as int),
+      );
+    }
+    return ListeningStatistics(
+      totalCountedPlays: summary['plays'] as int,
+      totalListeningDuration: Duration(
+        milliseconds: summary['duration'] as int,
+      ),
+      topTracks: top,
+      recentHistory: recent,
+      selectedSong: selected,
+      range: range,
+    );
+  });
 
   Future<T> transaction<T>(
     Future<T> Function(LocalMusicRepository repository) action,

@@ -1,6 +1,13 @@
 // Browser-only verification entry point, never imported by the application.
 import 'dart:convert';
 
+import 'package:cta2000/backend/controllers/controller_state.dart';
+import 'package:cta2000/backend/controllers/library_controller.dart';
+import 'package:cta2000/backend/controllers/lyrics_controller.dart';
+import 'package:cta2000/backend/controllers/playlist_controller.dart';
+import 'package:cta2000/backend/controllers/statistics_controller.dart';
+import 'package:cta2000/backend/controllers/playback_controller.dart';
+
 import 'package:cta2000/backend/models/music_models.dart';
 import 'package:cta2000/backend/services/database/local_music_repository.dart';
 import 'package:cta2000/backend/services/database/music_database.dart';
@@ -16,6 +23,7 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   MusicDatabase? database;
   JsonHttpClient? http;
+  final controllers = <MusicController<Object?>>[];
   try {
     final run = Uri.base.queryParameters['run'];
     if (run == null || !RegExp(r'^\d+$').hasMatch(run)) {
@@ -43,24 +51,6 @@ Future<void> main() async {
             audioFormat: 'MP3',
             filePath: 'test-only.mp3',
             dateAdded: date,
-            lyricsText: 'Persistent manual lyrics',
-          ),
-        );
-        await tx.playlists.insert(
-          Playlist(
-            playlistId: 'browser-playlist',
-            name: 'Browser playlist',
-            createdAt: date,
-            updatedAt: date,
-          ),
-        );
-        await tx.entries.insert(
-          PlaylistEntry(
-            entryId: 'browser-entry',
-            playlistId: 'browser-playlist',
-            songId: 'browser-song',
-            position: 0,
-            addedAt: date,
           ),
         );
         await tx.history.insert(
@@ -73,16 +63,92 @@ Future<void> main() async {
           ),
         );
       });
+      final library = LibraryController(repository);
+      final lyrics = LyricsController(repository);
+      var identifier = 0;
+      final playlists = PlaylistController(
+        repository,
+        idFactory: () => identifier++ == 0
+            ? 'browser-playlist'
+            : 'browser-entry-$identifier',
+      );
+      controllers.addAll([library, lyrics, playlists]);
+      await lyrics.saveManualLyrics('browser-song', 'Persistent manual lyrics');
+      await library.updateMetadata(
+        'browser-song',
+        const SongMetadataUpdate(title: 'Browser controller song'),
+      );
+      final playlist = await playlists.createPlaylist('Initial playlist');
+      await playlists.renamePlaylist(playlist.playlistId, 'Browser playlist');
+      await playlists.updateDescription(playlist.playlistId, '説明 🎵');
+      final first = await playlists.addSong(
+        playlist.playlistId,
+        'browser-song',
+      );
+      final second = await playlists.addSong(
+        playlist.playlistId,
+        'browser-song',
+      );
+      await playlists.reorder(second.entryId, 0);
+      await playlists.removeEntry(first.entryId);
+      await repository.songs.insert(
+        Song(
+          songId: 'browser-delete',
+          title: 'Temporary metadata',
+          artistName: 'Test',
+          durationMs: 1,
+          audioFormat: 'MP3',
+          filePath: 'no-real-file.mp3',
+          dateAdded: date,
+        ),
+      );
+      await playlists.addSong(playlist.playlistId, 'browser-delete');
+      await library.removeSong('browser-delete');
+      if (await repository.songs.find('browser-delete') != null) {
+        throw StateError('Controller deletion failed');
+      }
+    }
+    for (final controller in controllers) {
+      controller.dispose();
     }
     await database.close();
     repository = LocalMusicRepository(await database.open());
-    if (await repository.getLyrics('browser-song') !=
+    final restoredLibrary = LibraryController(repository);
+    final restoredLyrics = LyricsController(repository);
+    final restoredPlaylists = PlaylistController(repository);
+    final restoredStats = StatisticsController(repository);
+    final queue = PlaybackController(repository);
+    controllers.addAll([
+      restoredLibrary,
+      restoredLyrics,
+      restoredPlaylists,
+      restoredStats,
+      queue,
+    ]);
+    final restoredSong = await restoredLibrary.loadSong('browser-song');
+    final savedPlaylist = await restoredPlaylists.showPlaylist(
+      'browser-playlist',
+    );
+    final statistics = await restoredStats.load(songId: 'browser-song');
+    if (await restoredLyrics.loadManualLyrics('browser-song') !=
             'Persistent manual lyrics' ||
-        (await repository.getPlaylists()).single.name != 'Browser playlist' ||
-        (await repository.getEntries('browser-playlist')).single.songId !=
-            'browser-song' ||
-        !(await repository.history.list()).single.countedPlay) {
+        restoredSong.title != 'Browser controller song' ||
+        savedPlaylist.name != 'Browser playlist' ||
+        savedPlaylist.description != '説明 🎵' ||
+        restoredPlaylists.state.data.entries.single.position != 0 ||
+        restoredPlaylists.state.data.songs.single.songId != 'browser-song' ||
+        statistics.totalCountedPlays != 1 ||
+        statistics.totalListeningDuration.inMilliseconds != 500) {
       throw StateError('Browser persistence mismatch');
+    }
+    await queue.setQueue(['browser-song', 'browser-song']);
+    await queue.previous();
+    if (queue.state.data.queueIndex != 1) {
+      throw StateError('Queue previous wrap failed');
+    }
+    await queue.next();
+    if (queue.state.data.queueIndex != 0 || queue.state.data.isPlaying) {
+      throw StateError('Queue next wrap or unavailable playback failed');
     }
     http = JsonHttpClient(
       configuration: HttpConfiguration(
@@ -127,6 +193,8 @@ Future<void> main() async {
       'closeReopen': true,
       'tables': 4,
       'lyrics': true,
+      'controllers': true,
+      'queueWrap': true,
       'http': true,
       'hardwareAuthenticated': hardwareAuthenticated,
       'mobileTrustUnavailable': true,
@@ -139,6 +207,9 @@ Future<void> main() async {
       'stack': stack.toString(),
     });
   } finally {
+    for (final controller in controllers) {
+      controller.dispose();
+    }
     http?.close();
     await database?.close();
   }
